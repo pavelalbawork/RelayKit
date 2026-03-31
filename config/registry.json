@@ -1,0 +1,151 @@
+{
+  "defaults": {
+    "profile_dirname": ".relaykit",
+    "workspace_profile_filename": "workspace-profile.json",
+    "project_profile_filename": "project-profile.json",
+    "default_preset": "balanced-default",
+    "default_personas": [],
+    "persona_mode": "optional-addon"
+  },
+  "skills": {
+    "orchestrator": {
+      "path": "skills/relaykit-orchestrator/SKILL.md",
+      "default_role": "orchestrator",
+      "default_capabilities": ["planning", "routing", "convergence"]
+    },
+    "contributor": {
+      "path": "skills/relaykit-contributor/SKILL.md",
+      "default_role": "builder",
+      "default_capabilities": ["implementation", "repo_edit", "verification"]
+    },
+    "critic": {
+      "path": "skills/relaykit-critic/SKILL.md",
+      "default_role": "critic",
+      "default_capabilities": ["critique", "review"]
+    }
+  },
+  "skillpacks": {
+    "portable-default": {
+      "description": "Entry skill plus the core role pack.",
+      "entry_skill": "relaykit",
+      "skills": [
+        "relaykit",
+        "relaykit-orchestrator",
+        "relaykit-contributor",
+        "relaykit-critic"
+      ],
+      "recommended_for": ["codex", "claude-code", "generic-file-skill-hosts"]
+    }
+  },
+  "hosts": {
+    "claude-code": {
+      "path": "",
+      "supports_reasoning_effort": false,
+      "default_models": ["claude-sonnet-4"]
+    }
+  },
+  "models": {
+    "claude-sonnet-4": {
+      "path": "",
+      "hosts": ["claude-code"]
+    }
+  },
+  "personas": {
+    "pragmatic-builder": {
+      "path": "personas/pragmatic-builder.md",
+      "name": "Pragmatic Builder",
+      "summary": "Biases toward practical delivery, tight scope, and evidence-backed choices.",
+      "kind": "hybrid",
+      "tier": "recommended",
+      "activation": "optional-addon",
+      "compatible_roles": ["builder", "tester", "orchestrator"],
+      "compatible_hosts": [],
+      "token_cost": "low",
+      "conflicts_with": ["stern-architect"],
+      "load_order": 40,
+      "source": "built-in"
+    },
+    "stern-architect": {
+      "path": "personas/stern-architect.md",
+      "name": "Stern Architect",
+      "summary": "Pushes toward clearer tradeoffs and harder architectural scrutiny.",
+      "kind": "style",
+      "tier": "recommended",
+      "activation": "optional-addon",
+      "compatible_roles": ["orchestrator", "planner", "critic", "reviewer"],
+      "compatible_hosts": [],
+      "token_cost": "medium",
+      "conflicts_with": ["pragmatic-builder"],
+      "load_order": 50,
+      "source": "built-in"
+    },
+    "reality-checker": {
+      "path": "personas/reality-checker.md",
+      "name": "Reality Checker",
+      "summary": "Adds skeptical evidence-first pressure to review and verification.",
+      "kind": "hybrid",
+      "tier": "recommended",
+      "activation": "optional-addon",
+      "compatible_roles": ["tester", "reviewer", "critic"],
+      "compatible_hosts": [],
+      "token_cost": "low",
+      "conflicts_with": [],
+      "load_order": 55,
+      "source": "built-in"
+    },
+    "design-critic": {
+      "path": "personas/design-critic.md",
+      "name": "Design Critic",
+      "summary": "Adds sharper hierarchy and interaction pressure to frontend reviews.",
+      "kind": "expertise",
+      "tier": "recommended",
+      "activation": "optional-addon",
+      "compatible_roles": ["critic", "reviewer", "tester", "builder"],
+      "compatible_hosts": [],
+      "token_cost": "medium",
+      "conflicts_with": [],
+      "load_order": 65,
+      "source": "built-in"
+    }
+  },
+  "presets": {
+    "balanced-default": {
+      "intent": "Single-tool default with optional critique",
+      "cost_posture": "balanced",
+      "lanes": {
+        "orchestrator": {
+          "skill": "orchestrator",
+          "role": "orchestrator",
+          "host": "claude-code",
+          "model": "claude-sonnet-4",
+          "capabilities": ["planning", "routing", "convergence"],
+          "credit_pool": "default",
+          "personas": []
+        },
+        "builder": {
+          "skill": "contributor",
+          "role": "builder",
+          "host": "claude-code",
+          "model": "claude-sonnet-4",
+          "capabilities": ["implementation", "repo_edit", "verification"],
+          "credit_pool": "default",
+          "personas": []
+        },
+        "critic": {
+          "skill": "critic",
+          "role": "critic",
+          "host": "claude-code",
+          "model": "claude-sonnet-4",
+          "capabilities": ["critique", "review"],
+          "credit_pool": "default",
+          "personas": []
+        }
+      }
+    },
+    "custom": {
+      "intent": "Define your own topology",
+      "cost_posture": "variable",
+      "lanes": {}
+    }
+  }
+}

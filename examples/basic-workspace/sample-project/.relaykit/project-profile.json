@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "kind": "project-profile",
+  "project_name": "sample-project",
+  "inherits_workspace_defaults": true,
+  "preset": null,
+  "default_personas": [],
+  "lane_overrides": {},
+  "notes": "Example project profile inheriting workspace defaults."
+}

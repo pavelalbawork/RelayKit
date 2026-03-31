@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RelayKit Workspace Profile",
+  "type": "object",
+  "required": [
+    "version",
+    "kind",
+    "inventory",
+    "preset",
+    "default_personas",
+    "lane_overrides"
+  ],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "kind": {
+      "const": "workspace-profile"
+    },
+    "inventory": {
+      "type": "object",
+      "required": [
+        "available_hosts",
+        "allowed_models_by_host",
+        "default_posture"
+      ],
+      "properties": {
+        "available_hosts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "allowed_models_by_host": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "default_posture": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "preset": {
+      "type": "string"
+    },
+    "default_personas": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "lane_overrides": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/laneOverride"
+      }
+    },
+    "notes": {
+      "type": "string"
+    }
+  },
+  "$defs": {
+    "laneOverride": {
+      "type": "object",
+      "properties": {
+        "skill": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string"
+        },
+        "host": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "reasoning_effort": {
+          "type": "string"
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "credit_pool": {
+          "type": "string"
+        },
+        "personas": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

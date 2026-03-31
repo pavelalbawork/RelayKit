@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "kind": "workspace-profile",
+  "inventory": {
+    "available_hosts": [
+      "claude-code"
+    ],
+    "allowed_models_by_host": {
+      "claude-code": [
+        "claude-sonnet-4"
+      ]
+    },
+    "default_posture": "balanced"
+  },
+  "preset": "balanced-default",
+  "default_personas": [],
+  "lane_overrides": {},
+  "notes": "Example RelayKit workspace with a single host."
+}
