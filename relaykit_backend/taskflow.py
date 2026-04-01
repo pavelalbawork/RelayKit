@@ -45,7 +45,7 @@ ROLE_TO_SKILL = {
     "reviewer": "reviewer",
     "tester": "tester",
     "researcher": "researcher",
-    "converger": "converger",
+    "converger": "orchestrator",
 }
 FRONTEND_KEYWORDS = {
     "frontend",

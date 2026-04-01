@@ -1,6 +1,6 @@
 ---
 name: relaykit
-description: Use when you want RelayKit to intake a task, ask the right clarification questions, recommend the smallest effective setup, and then dispatch into the matching role skills from any host that can load file-based skills or prompt assets.
+description: Use when you want RelayKit to augment Codex, Claude Code, Antigravity, or Gemini CLI for multi-tool, human-in-the-loop parallel execution, starting from task intake and ending in the right lane assignments.
 license: MIT
 compatibility:
   hosts:
@@ -19,13 +19,14 @@ metadata:
 
 Use this as the entry skill for the RelayKit pack.
 
-This skill does not replace the role skills. It chooses and loads them cleanly.
+This skill does not replace the role skills. It chooses and loads them cleanly so multiple harnesses can behave like one operator-directed system.
 
 ## When To Use It
 
 - the workspace has not been onboarded into RelayKit yet
-- the host should use the task-first RelayKit intake flow before committing to a setup
+- the host should use the RelayKit intake flow before committing to lane assignments
 - the task needs a portable setup recommendation instead of a tool-bound role assumption
+- the operator wants multi-tool work to stay explicitly human-directed
 - you want to load the RelayKit role pack from a skill-aware host
 
 ## Read Order
@@ -44,16 +45,16 @@ This skill does not replace the role skills. It chooses and loads them cleanly.
 
 ## Practical Rule
 
-Prefer the RelayKit MCP server when the host can call MCP tools directly.
+Prefer the RelayKit MCP server when the host can call tools directly and should own the wiring and onboarding flow.
 
 Prefer the CLI when the host is shell-first.
 
 Use `render-task-part` for current task-part launch bundles.
 
-Use `advanced stack` or `advanced render-prompt-stack` only when you already know the exact role or host assignment and do not need the task-first intake flow.
+Use `advanced stack` or `advanced render-prompt-stack` only when you already know the exact lane or host assignment and do not need the intake flow.
 
 ## Stop Rules
 
-- Do not hard-bind a role to one tool when RelayKit can recommend a better setup.
+- Do not hard-bind a role to one tool when RelayKit can recommend a better multi-harness setup.
 - Do not skip the clarification phase unless the user explicitly asks to do so.
 - Do not dump the whole protocol into context if the resolved task parts already give the minimal load order.

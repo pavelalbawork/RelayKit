@@ -22,6 +22,21 @@
       "path": "skills/relaykit-critic/SKILL.md",
       "default_role": "critic",
       "default_capabilities": ["critique", "review"]
+    },
+    "researcher": {
+      "path": "skills/relaykit-researcher/SKILL.md",
+      "default_role": "researcher",
+      "default_capabilities": ["research", "synthesis", "evidence_gathering"]
+    },
+    "tester": {
+      "path": "skills/relaykit-tester/SKILL.md",
+      "default_role": "tester",
+      "default_capabilities": ["testing", "verification", "coverage"]
+    },
+    "reviewer": {
+      "path": "skills/relaykit-reviewer/SKILL.md",
+      "default_role": "reviewer",
+      "default_capabilities": ["review", "gate_authority", "critique"]
     }
   },
   "skillpacks": {
@@ -32,22 +47,55 @@
         "relaykit",
         "relaykit-orchestrator",
         "relaykit-contributor",
-        "relaykit-critic"
+        "relaykit-critic",
+        "relaykit-researcher",
+        "relaykit-tester",
+        "relaykit-reviewer"
       ],
       "recommended_for": ["codex", "claude-code", "generic-file-skill-hosts"]
     }
   },
   "hosts": {
+    "codex": {
+      "path": "",
+      "supports_reasoning_effort": true,
+      "default_models": ["gpt-5.4", "gpt-5.4-mini"]
+    },
     "claude-code": {
       "path": "",
       "supports_reasoning_effort": false,
-      "default_models": ["claude-sonnet-4"]
+      "default_models": ["opus-4.6", "sonnet-4.6"]
+    },
+    "antigravity": {
+      "path": "",
+      "supports_reasoning_effort": false,
+      "default_models": ["gemini-3.1-pro", "gemini-3.1-flash", "opus-4.6", "sonnet-4.6"]
     }
   },
   "models": {
-    "claude-sonnet-4": {
+    "gpt-5.4": {
       "path": "",
-      "hosts": ["claude-code"]
+      "hosts": ["codex"]
+    },
+    "gpt-5.4-mini": {
+      "path": "",
+      "hosts": ["codex"]
+    },
+    "opus-4.6": {
+      "path": "",
+      "hosts": ["claude-code", "antigravity"]
+    },
+    "sonnet-4.6": {
+      "path": "",
+      "hosts": ["claude-code", "antigravity"]
+    },
+    "gemini-3.1-pro": {
+      "path": "",
+      "hosts": ["antigravity"]
+    },
+    "gemini-3.1-flash": {
+      "path": "",
+      "hosts": ["antigravity"]
     }
   },
   "personas": {
@@ -59,7 +107,7 @@
       "tier": "recommended",
       "activation": "optional-addon",
       "compatible_roles": ["builder", "tester", "orchestrator"],
-      "compatible_hosts": [],
+      "compatible_hosts": ["codex", "claude-code", "antigravity"],
       "token_cost": "low",
       "conflicts_with": ["stern-architect"],
       "load_order": 40,
@@ -73,7 +121,7 @@
       "tier": "recommended",
       "activation": "optional-addon",
       "compatible_roles": ["orchestrator", "planner", "critic", "reviewer"],
-      "compatible_hosts": [],
+      "compatible_hosts": ["codex", "claude-code", "antigravity"],
       "token_cost": "medium",
       "conflicts_with": ["pragmatic-builder"],
       "load_order": 50,
@@ -87,7 +135,7 @@
       "tier": "recommended",
       "activation": "optional-addon",
       "compatible_roles": ["tester", "reviewer", "critic"],
-      "compatible_hosts": [],
+      "compatible_hosts": ["codex", "claude-code", "antigravity"],
       "token_cost": "low",
       "conflicts_with": [],
       "load_order": 55,
@@ -101,7 +149,7 @@
       "tier": "recommended",
       "activation": "optional-addon",
       "compatible_roles": ["critic", "reviewer", "tester", "builder"],
-      "compatible_hosts": [],
+      "compatible_hosts": ["codex", "claude-code", "antigravity"],
       "token_cost": "medium",
       "conflicts_with": [],
       "load_order": 65,
@@ -110,34 +158,35 @@
   },
   "presets": {
     "balanced-default": {
-      "intent": "Single-tool default with optional critique",
+      "intent": "Strong planning and critique with fast execution",
       "cost_posture": "balanced",
       "lanes": {
         "orchestrator": {
           "skill": "orchestrator",
           "role": "orchestrator",
           "host": "claude-code",
-          "model": "claude-sonnet-4",
+          "model": "opus-4.6",
           "capabilities": ["planning", "routing", "convergence"],
-          "credit_pool": "default",
+          "credit_pool": "anthropic",
           "personas": []
         },
         "builder": {
           "skill": "contributor",
           "role": "builder",
-          "host": "claude-code",
-          "model": "claude-sonnet-4",
+          "host": "codex",
+          "model": "gpt-5.4",
+          "reasoning_effort": "high",
           "capabilities": ["implementation", "repo_edit", "verification"],
-          "credit_pool": "default",
+          "credit_pool": "openai",
           "personas": []
         },
         "critic": {
           "skill": "critic",
           "role": "critic",
           "host": "claude-code",
-          "model": "claude-sonnet-4",
+          "model": "sonnet-4.6",
           "capabilities": ["critique", "review"],
-          "credit_pool": "default",
+          "credit_pool": "anthropic",
           "personas": []
         }
       }

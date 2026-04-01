@@ -1,9 +1,9 @@
 # Sample Project AGENTS
 
-This sample project keeps RelayKit repo-first.
+This is the example project used in the RelayKit walkthrough.
 
-## Local Rule
+## Rules
 
-- inherit workspace defaults unless the packet needs something different
-- keep frontend work browser-backed when that helps verification
-- use explicit lane overrides instead of changing the workspace default for one project
+- Only edit files under `src/`
+- Do not change the test file without also updating the implementation
+- Verification target: `python3 -m pytest src/ -v` passes with no failures

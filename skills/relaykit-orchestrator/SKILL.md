@@ -31,8 +31,8 @@ Do not use this skill as an excuse to own all implementation. An orchestrator sh
 
 1. The active packet, plan, or routing note
 2. Repo `AGENTS.md`
-3. `protocols/operator-protocol/LANE_MODEL.md` only if lane ownership or topology is unclear
-4. `protocols/operator-protocol/LANE_PRESETS.md` only if you need a default starting map
+3. Run `relaykit list presets` only if lane topology is unclear and you need a default starting map
+4. Run `relaykit preset <name>` only if you need to inspect a specific lane layout
 
 ## Core Workflow
 

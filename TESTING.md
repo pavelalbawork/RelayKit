@@ -8,14 +8,23 @@
 
 ## Installation
 
-```bash
-# Clone and install
-cd /Users/palba/Projects/relaykit
-pip install -e .
+**Recommended — `pipx` (no activation needed):**
 
-# Verify
+```bash
+pipx install -e /path/to/relaykit
 relaykit --version
-# Expected: relaykit.py 0.3.0
+relaykit-mcp --help
+```
+
+**Fallback — venv:**
+
+```bash
+cd /path/to/relaykit
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+relaykit --version
+relaykit-mcp --help
 ```
 
 ## Setup: Add Your Hosts to the Registry
@@ -79,14 +88,27 @@ relaykit doctor --workspace-root .
 
 ### Step 1: Configure the MCP server in Codex
 
-Add this to your Codex MCP config (usually `~/.codex/mcp.json` or equivalent):
+Add this to your Codex MCP config (usually `~/.codex/mcp.json` or equivalent).
+
+If installed via `pipx`:
 
 ```json
 {
   "mcpServers": {
     "relaykit": {
-      "command": "python3",
-      "args": ["/Users/palba/Projects/relaykit/mcp/relaykit/server.py"]
+      "command": "relaykit-mcp"
+    }
+  }
+}
+```
+
+If installed via venv, use the full path instead:
+
+```json
+{
+  "mcpServers": {
+    "relaykit": {
+      "command": "/path/to/relaykit/.venv/bin/relaykit-mcp"
     }
   }
 }
@@ -95,7 +117,7 @@ Add this to your Codex MCP config (usually `~/.codex/mcp.json` or equivalent):
 ### Step 2: Install skills (optional, for skill-first flow)
 
 ```bash
-cp -r /Users/palba/Projects/relaykit/skills/* ~/.codex/skills/ 2>/dev/null || echo "Create ~/.codex/skills/ first"
+cp -r /Users/palba/Projects/Orchestration/RelayKit/skills/* ~/.codex/skills/ 2>/dev/null || echo "Create ~/.codex/skills/ first"
 ```
 
 ### Step 3: Run the test from Codex
@@ -161,7 +183,7 @@ Open Codex and run these MCP tool calls (or ask Codex to run them):
 
 ```bash
 mkdir -p ~/.gemini/skills
-cp -r /Users/palba/Projects/relaykit/skills/* ~/.gemini/skills/
+cp -r /Users/palba/Projects/Orchestration/RelayKit/skills/* ~/.gemini/skills/
 ```
 
 ### Step 2: Create a test workspace

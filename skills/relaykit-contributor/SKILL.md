@@ -20,20 +20,22 @@ metadata:
 
 Use this skill when a lane is expected to produce the work, not just route it.
 
-This skill is intentionally broader than one protocol role. It commonly maps to:
+This skill is the default for the `builder` role: implementation, repo edits, documentation, or focused execution slices.
 
-- `builder`
-- `researcher`
-- `tester`
+If the lane is assigned a more specific role, prefer the dedicated skill:
 
-The packet or plan decides which one is active.
+- `researcher` → load `relaykit-researcher`
+- `tester` → load `relaykit-tester`
+- `reviewer` → load `relaykit-reviewer`
+
+Use this skill when no dedicated skill applies or when the packet mixes builder work that doesn't fit a single specialized role.
 
 ## Read Order
 
 1. The active packet or handoff card
 2. Repo `AGENTS.md`
-3. Repo-local `THREAD_SYNC.md`, `PROGRESS.md`, or active exec plan only if the repo is actually using them
-4. `protocols/operator-protocol/ARTIFACT_STANDARD.md` only if artifact shape is unclear
+3. Repo-local `PROGRESS.md` or active exec plan only if the repo is actually using them
+4. `templates/TASK_PACKET_TEMPLATE.md` only if the expected artifact shape is unclear
 
 ## Core Workflow
 

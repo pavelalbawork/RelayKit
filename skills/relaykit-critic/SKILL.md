@@ -31,7 +31,7 @@ By default this skill is advisory. It becomes gatekeeping only when the lane is 
 
 1. The active plan, packet, delivery, or checkpoint artifact
 2. Repo `AGENTS.md` when the critique depends on repo rules
-3. `protocols/operator-protocol/ROLE_CATALOG.md` only if role versus review authority is unclear
+3. The task's `review_gate` field or lane assignment only if role versus gate authority is unclear
 
 ## Core Workflow
 

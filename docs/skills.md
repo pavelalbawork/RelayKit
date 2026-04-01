@@ -2,20 +2,27 @@
 
 ## What Skills Are
 
-Skills are portable prompt assets that define how a role should behave. They ship as markdown files with YAML frontmatter and work across any host that can load file-based skills.
+Skills are portable prompt assets that define how a role should behave. They ship as markdown files with YAML frontmatter and work across any harness that can load file-based skills.
 
 ## Included Skills
 
 | Skill | Role | When to use |
 |---|---|---|
-| `relaykit` | entry | Task intake, setup recommendation, skill dispatch |
-| `relaykit-orchestrator` | orchestrator | Routing, sequencing, checkpointing, convergence |
+| `relaykit` | entry | Task intake, lane recommendation, skill dispatch |
+| `relaykit-orchestrator` | orchestrator | Lane planning, sequencing, checkpointing, convergence |
 | `relaykit-contributor` | builder | Implementation, repo editing, verification |
-| `relaykit-critic` | critic | Challenge and critique without ownership transfer |
+| `relaykit-critic` | critic | Advisory challenge without ownership transfer |
+| `relaykit-reviewer` | reviewer | Gate review with explicit pass/fail authority |
+| `relaykit-researcher` | researcher | Evidence gathering and synthesis before execution |
+| `relaykit-tester` | tester | Verification against acceptance criteria, concrete pass/fail |
+
+## Updating Skills
+
+Skills ship with the product. Do not edit skill files installed in harness homes directly — reinstall from the product to update them.
 
 ## How Skills Load
 
-The entry skill (`relaykit`) drives the task-first flow. After setup confirmation, it loads the matching role skill for each task part.
+The entry skill (`relaykit`) drives the intake flow. After setup confirmation, it loads the matching role skill for each task part.
 
 Each role skill defines:
 - When to use it
@@ -38,6 +45,8 @@ cp -r skills/ ~/.claude/skills/
 # Gemini CLI
 cp -r skills/ ~/.gemini/skills/
 ```
+
+If the harness can call MCP tools directly, prefer `relaykit_host_status` plus `relaykit_bootstrap_host` so the harness owns the wiring instead of the user editing config by hand.
 
 ## Writing Custom Skills
 

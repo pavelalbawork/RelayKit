@@ -1,0 +1,53 @@
+{
+  "task_id": "task-001",
+  "created_at": "2026-04-01T10:00:00Z",
+  "status": "reflected",
+  "task": "Add rate limiting to the login endpoint so it blocks after 5 failed attempts",
+  "workspace_root": "/path/to/basic-workspace",
+  "project_root": "/path/to/basic-workspace/sample-project",
+  "archetype": "backend",
+  "flags": {
+    "frontend": false,
+    "review_only": false,
+    "research_heavy": false,
+    "cross_project": false,
+    "pause_sensitive": false
+  },
+  "coordination": "solo",
+  "continuity": "lean",
+  "confidence": "high",
+  "task_parts": [
+    {
+      "part_id": "part-1",
+      "role": "builder",
+      "skill": "contributor",
+      "host": "codex",
+      "model": "gpt-5.4",
+      "reasoning_effort": "high",
+      "capabilities": ["implementation", "repo_edit", "verification"],
+      "lane_hint": "builder",
+      "personas": ["pragmatic-builder"],
+      "objective": "Add a rate limiter to the login function in src/auth.py that blocks after 5 failed attempts per email within a 15-minute window. Update tests in src/test_auth.py to cover the new behaviour.",
+      "allowed_scope": ["src/auth.py", "src/test_auth.py"],
+      "excluded_scope": ["any file outside src/"],
+      "verification_target": "python3 -m unittest discover -s src -p 'test_*.py' -v passes with no failures",
+      "stop_condition": "rate limiter implemented, tests pass, no scope expansion"
+    }
+  ],
+  "checkpoints": [
+    {
+      "checkpoint_id": "cp-1",
+      "notes": "Rate limiter added using in-memory dict. login() now raises RateLimitError after 5 failures. Tests updated — all passing.",
+      "outcome": "ready_for_next_phase",
+      "recommended_action": "reflect",
+      "timestamp": "2026-04-01T10:42:00Z"
+    }
+  ],
+  "reflection": {
+    "split_worth_it": "no",
+    "tool_fit": "good",
+    "simpler_better": "no",
+    "notes": "Solo builder lane was the right call. No coordination overhead needed for a single-file change.",
+    "timestamp": "2026-04-01T10:45:00Z"
+  }
+}
