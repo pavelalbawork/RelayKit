@@ -4,8 +4,10 @@ from __future__ import annotations
 import argparse
 import json
 from copy import deepcopy
+import os
 from pathlib import Path
 import re
+import shutil
 import sys
 
 
@@ -36,6 +38,22 @@ PERSONA_TIERS = {"recommended", "optional"}
 PERSONA_ACTIVATIONS = {"optional-addon"}
 PERSONA_KINDS = {"style", "expertise", "hybrid"}
 PERSONA_TOKEN_COSTS = {"low", "medium", "high"}
+SUPPORTED_ONBOARDING_HOSTS = ("codex", "claude-code", "gemini-cli", "antigravity")
+HOST_SKILL_HOMES = {
+    "codex": Path("~/.codex/skills"),
+    "claude-code": Path("~/.claude/skills"),
+    "gemini-cli": Path("~/.gemini/skills"),
+}
+HOST_MCP_TARGETS = {
+    "codex": {"kind": "toml", "path": Path("~/.codex/config.toml")},
+    "antigravity": {"kind": "json", "path": Path("~/.gemini/antigravity/mcp_config.json")},
+}
+PRODUCT_NAME = "RelayKit"
+MCP_SERVER_NAME = "relaykit"
+MCP_SERVER_PATH = (REPO_ROOT / "mcp" / "relaykit" / "server.py").resolve()
+MCP_SERVER_COMMAND = sys.executable
+SKILLS_ROOT = REPO_ROOT / "skills"
+ONBOARDING_STATE_PATH = Path("~/.relaykit/relaykit-onboarding-state.json")
 
 
 def fail(message: str, *, details: list[str] | None = None) -> None:
@@ -63,6 +81,366 @@ def read_json(path: Path) -> dict:
 def write_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def onboarding_state_path() -> Path:
+    return expand_user_path(ONBOARDING_STATE_PATH)
+
+
+def load_onboarding_state() -> dict[str, object]:
+    path = onboarding_state_path()
+    if not path.exists():
+        return {"version": 1, "product": PRODUCT_NAME, "hosts": {}}
+    payload = read_json(path)
+    if not isinstance(payload, dict):
+        return {"version": 1, "product": PRODUCT_NAME, "hosts": {}}
+    payload.setdefault("version", 1)
+    payload.setdefault("product", PRODUCT_NAME)
+    payload.setdefault("hosts", {})
+    return payload
+
+
+def save_onboarding_state(payload: dict[str, object]) -> None:
+    write_json(onboarding_state_path(), payload)
+
+
+def host_state(state: dict[str, object], host_name: str) -> dict[str, object]:
+    hosts = state.setdefault("hosts", {})
+    if not isinstance(hosts, dict):
+        fail("onboarding state is invalid: `hosts` must be an object")
+    entry = hosts.setdefault(host_name, {})
+    if not isinstance(entry, dict):
+        fail(f"onboarding state is invalid for host `{host_name}`")
+    return entry
+
+
+def expand_user_path(path: Path) -> Path:
+    return path.expanduser().resolve()
+
+
+def detect_current_host() -> str | None:
+    explicit = os.environ.get("RELAYKIT_HOST")
+    if explicit in SUPPORTED_ONBOARDING_HOSTS:
+        return explicit
+    if os.environ.get("CODEX_HOME"):
+        return "codex"
+    return None
+
+
+def onboarding_hosts(requested_hosts: list[str] | None, *, current_host: bool) -> list[str]:
+    hosts: list[str] = []
+    if current_host:
+        detected = detect_current_host()
+        if detected is None:
+            fail(
+                "unable to detect the current host; pass --host explicitly or set RELAYKIT_HOST",
+            )
+        hosts.append(detected)
+    hosts.extend(requested_hosts or [])
+    if not hosts:
+        return list(SUPPORTED_ONBOARDING_HOSTS)
+    unique_hosts: list[str] = []
+    for host in hosts:
+        if host not in SUPPORTED_ONBOARDING_HOSTS:
+            fail(f"unsupported host `{host}`", details=[f"supported hosts: {', '.join(SUPPORTED_ONBOARDING_HOSTS)}"])
+        if host not in unique_hosts:
+            unique_hosts.append(host)
+    return unique_hosts
+
+
+def mcp_server_spec() -> dict[str, object]:
+    return {
+        "name": MCP_SERVER_NAME,
+        "command": MCP_SERVER_COMMAND,
+        "args": [str(MCP_SERVER_PATH)],
+    }
+
+
+def skill_names() -> list[str]:
+    return sorted(path.name for path in SKILLS_ROOT.iterdir() if (path / "SKILL.md").exists())
+
+
+def install_skill_home(destination: Path, *, force: bool) -> list[str]:
+    destination.mkdir(parents=True, exist_ok=True)
+    installed: list[str] = []
+    for skill_name in skill_names():
+        source = SKILLS_ROOT / skill_name
+        target = destination / skill_name
+        if target.exists():
+            if not force:
+                continue
+            shutil.rmtree(target)
+        shutil.copytree(source, target)
+        installed.append(str(target.resolve()))
+    return installed
+
+
+def remove_skill_home(destination: Path) -> list[str]:
+    removed: list[str] = []
+    for skill_name in skill_names():
+        target = destination / skill_name
+        if target.exists():
+            shutil.rmtree(target)
+            removed.append(str(target.resolve()))
+    return removed
+
+
+def strip_toml_table(text: str, table_name: str) -> str:
+    pattern = re.compile(rf"(?ms)^\[{re.escape(table_name)}\]\n(?:.*\n)*?(?=^\[|\Z)")
+    return re.sub(pattern, "", text)
+
+
+def write_codex_mcp_config(path: Path) -> dict[str, object]:
+    existing = path.read_text(encoding="utf-8") if path.exists() else ""
+    updated = strip_toml_table(existing, f"mcp_servers.{MCP_SERVER_NAME}").rstrip()
+    block = "\n".join(
+        [
+            f"[mcp_servers.{MCP_SERVER_NAME}]",
+            f'command = "{MCP_SERVER_COMMAND}"',
+            f'args = ["{MCP_SERVER_PATH}"]',
+        ]
+    )
+    final_text = (updated + "\n\n" + block + "\n").lstrip("\n")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(final_text, encoding="utf-8")
+    return {"path": str(path.resolve()), "configured": True}
+
+
+def remove_codex_mcp_config(path: Path) -> dict[str, object]:
+    existing = path.read_text(encoding="utf-8") if path.exists() else ""
+    updated = strip_toml_table(existing, f"mcp_servers.{MCP_SERVER_NAME}").rstrip()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if updated:
+        path.write_text(updated + "\n", encoding="utf-8")
+    else:
+        path.write_text("", encoding="utf-8")
+    return {"path": str(path.resolve()), "configured": False}
+
+
+def write_json_mcp_config(path: Path) -> dict[str, object]:
+    payload = read_json(path) if path.exists() else {}
+    mcp_servers = payload.setdefault("mcpServers", {})
+    if not isinstance(mcp_servers, dict):
+        fail(f"`mcpServers` must be an object in {path}")
+    mcp_servers[MCP_SERVER_NAME] = {
+        "command": MCP_SERVER_COMMAND,
+        "args": [str(MCP_SERVER_PATH)],
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    return {"path": str(path.resolve()), "configured": True}
+
+
+def remove_json_mcp_config(path: Path) -> dict[str, object]:
+    payload = read_json(path) if path.exists() else {}
+    mcp_servers = payload.setdefault("mcpServers", {})
+    if not isinstance(mcp_servers, dict):
+        fail(f"`mcpServers` must be an object in {path}")
+    mcp_servers.pop(MCP_SERVER_NAME, None)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    return {"path": str(path.resolve()), "configured": False}
+
+
+def host_onboarding_status(host_name: str) -> dict[str, object]:
+    state = load_onboarding_state()
+    persisted = host_state(state, host_name)
+    payload: dict[str, object] = {
+        "host": host_name,
+        "product": PRODUCT_NAME,
+        "current_host_detected": detect_current_host() == host_name,
+        "recommended": [],
+        "state": persisted,
+    }
+    skill_home = HOST_SKILL_HOMES.get(host_name)
+    if skill_home is not None:
+        resolved = expand_user_path(skill_home)
+        installed = (resolved / "relaykit" / "SKILL.md").exists()
+        payload["skills"] = {
+            "path": str(resolved),
+            "installed": installed,
+            "auto_configurable": True,
+        }
+        if not installed:
+            payload["recommended"].append(
+                {
+                    "action": "install_skills",
+                    "host": host_name,
+                    "path": str(resolved),
+                }
+            )
+    else:
+        payload["skills"] = {
+            "path": None,
+            "installed": False,
+            "auto_configurable": False,
+        }
+
+    mcp_target = HOST_MCP_TARGETS.get(host_name)
+    if mcp_target is None:
+        payload["mcp"] = {
+            "path": None,
+            "configured": False,
+            "auto_configurable": False,
+        }
+        return payload
+
+    resolved_mcp_path = expand_user_path(mcp_target["path"])
+    configured = False
+    if mcp_target["kind"] == "toml" and resolved_mcp_path.exists():
+        configured = f"[mcp_servers.{MCP_SERVER_NAME}]" in resolved_mcp_path.read_text(encoding="utf-8")
+    if mcp_target["kind"] == "json" and resolved_mcp_path.exists():
+        configured = MCP_SERVER_NAME in read_json(resolved_mcp_path).get("mcpServers", {})
+    payload["mcp"] = {
+        "path": str(resolved_mcp_path),
+        "configured": configured,
+        "auto_configurable": True,
+        "server": mcp_server_spec(),
+    }
+    if not configured:
+        payload["recommended"].append(
+            {
+                "action": "install_mcp",
+                "host": host_name,
+                "path": str(resolved_mcp_path),
+                "server": mcp_server_spec(),
+            }
+        )
+    return payload
+
+
+def bootstrap_host(
+    host_name: str,
+    *,
+    install_skills: bool,
+    configure_mcp: bool,
+    force: bool,
+    dry_run: bool,
+) -> dict[str, object]:
+    payload = {"host": host_name, "product": PRODUCT_NAME, "dry_run": dry_run}
+    state = load_onboarding_state()
+    entry = host_state(state, host_name)
+    if install_skills:
+        skill_home = HOST_SKILL_HOMES.get(host_name)
+        if skill_home is None:
+            payload["skills"] = {"configured": False, "reason": "no known skill home for this host"}
+        else:
+            resolved_home = expand_user_path(skill_home)
+            installed = (
+                [str((resolved_home / name).resolve()) for name in skill_names()]
+                if dry_run
+                else install_skill_home(resolved_home, force=force)
+            )
+            payload["skills"] = {
+                "configured": not dry_run,
+                "path": str(resolved_home),
+                "installed_paths": installed,
+            }
+    if configure_mcp:
+        mcp_target = HOST_MCP_TARGETS.get(host_name)
+        if mcp_target is None:
+            payload["mcp"] = {"configured": False, "reason": "no documented auto-configurable MCP surface for this host"}
+        else:
+            resolved = expand_user_path(mcp_target["path"])
+            if dry_run:
+                payload["mcp"] = {"configured": False, "path": str(resolved), "preview": mcp_server_spec()}
+            elif mcp_target["kind"] == "toml":
+                payload["mcp"] = write_codex_mcp_config(resolved)
+            else:
+                payload["mcp"] = write_json_mcp_config(resolved)
+    if not dry_run:
+        entry["last_bootstrap"] = payload
+        entry["dismissed"] = False
+        save_onboarding_state(state)
+    return payload
+
+
+def uninstall_host(
+    host_name: str,
+    *,
+    remove_skills: bool,
+    remove_mcp: bool,
+    dry_run: bool,
+) -> dict[str, object]:
+    payload = {"host": host_name, "product": PRODUCT_NAME, "dry_run": dry_run}
+    state = load_onboarding_state()
+    entry = host_state(state, host_name)
+    if remove_skills:
+        skill_home = HOST_SKILL_HOMES.get(host_name)
+        if skill_home is None:
+            payload["skills"] = {"configured": False, "reason": "no known skill home for this host"}
+        else:
+            resolved = expand_user_path(skill_home)
+            payload["skills"] = {
+                "configured": False,
+                "path": str(resolved),
+                "removed_paths": [str((resolved / name).resolve()) for name in skill_names()] if dry_run else remove_skill_home(resolved),
+            }
+    if remove_mcp:
+        mcp_target = HOST_MCP_TARGETS.get(host_name)
+        if mcp_target is None:
+            payload["mcp"] = {"configured": False, "reason": "no documented auto-configurable MCP surface for this host"}
+        else:
+            resolved = expand_user_path(mcp_target["path"])
+            if dry_run:
+                payload["mcp"] = {"configured": True, "path": str(resolved), "preview_remove": MCP_SERVER_NAME}
+            elif mcp_target["kind"] == "toml":
+                payload["mcp"] = remove_codex_mcp_config(resolved)
+            else:
+                payload["mcp"] = remove_json_mcp_config(resolved)
+    if not dry_run:
+        entry["last_uninstall"] = payload
+        save_onboarding_state(state)
+    return payload
+
+
+def build_onboarding_actions(hosts_payload: list[dict[str, object]]) -> dict[str, object]:
+    hosts_needing_onboarding = [item["host"] for item in hosts_payload if item.get("recommended")]
+    dismissed_hosts = [
+        item["host"]
+        for item in hosts_payload
+        if item.get("recommended") and isinstance(item.get("state"), dict) and item["state"].get("dismissed")
+    ]
+    return {
+        "needs_onboarding": bool(hosts_needing_onboarding),
+        "should_prompt": bool(hosts_needing_onboarding) and len(dismissed_hosts) != len(hosts_needing_onboarding),
+        "suggested_hosts": hosts_needing_onboarding,
+        "dismissed_hosts": dismissed_hosts,
+        "prompt_text": (
+            "RelayKit is available, but host integration is incomplete. "
+            "Install skills and MCP wiring for the suggested host(s)?"
+            if hosts_needing_onboarding
+            else "RelayKit host integration is already configured for the requested host set."
+        ),
+        "apply_tool": "relaykit_bootstrap_host",
+        "apply_arguments": {
+            "host": hosts_needing_onboarding,
+            "force": False,
+        },
+        "skip_tool": "relaykit_acknowledge_host",
+        "skip_arguments": {"host": hosts_needing_onboarding},
+        "remove_tool": "relaykit_uninstall_host",
+        "remove_arguments": {"host": hosts_needing_onboarding, "dry_run": True},
+    }
+
+
+def attach_host_onboarding(
+    payload: dict[str, object],
+    *,
+    requested_hosts: list[str] | None = None,
+    current_host: bool = False,
+    auto_detect: bool = True,
+) -> dict[str, object]:
+    use_current_host = current_host or (auto_detect and detect_current_host() is not None)
+    if not requested_hosts and not use_current_host:
+        return payload
+    hosts = onboarding_hosts(requested_hosts, current_host=use_current_host)
+    payload["host_onboarding"] = {
+        "server": mcp_server_spec(),
+        "hosts": [host_onboarding_status(host_name) for host_name in hosts],
+    }
+    payload["needs_host_onboarding"] = any(item["recommended"] for item in payload["host_onboarding"]["hosts"])
+    return payload
 
 
 def registry_defaults(registry: dict) -> dict:
@@ -1459,6 +1837,124 @@ def command_stack(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_host_status(args: argparse.Namespace) -> int:
+    hosts = onboarding_hosts(args.host, current_host=args.current_host)
+    hosts_payload = [host_onboarding_status(host_name) for host_name in hosts]
+    payload = {
+        "product": PRODUCT_NAME,
+        "server": mcp_server_spec(),
+        "hosts": hosts_payload,
+        "actions": build_onboarding_actions(hosts_payload),
+    }
+    print(json.dumps(payload, indent=2))
+    needs_onboarding = payload["actions"]["needs_onboarding"]
+    return 2 if needs_onboarding else 0
+
+
+def command_bootstrap_host(args: argparse.Namespace) -> int:
+    hosts = onboarding_hosts(args.host, current_host=args.current_host)
+    payload = {
+        "product": PRODUCT_NAME,
+        "server": mcp_server_spec(),
+        "results": [
+            bootstrap_host(
+                host_name,
+                install_skills=not args.skip_skills,
+                configure_mcp=not args.skip_mcp,
+                force=args.force,
+                dry_run=bool(args.dry_run),
+            )
+            for host_name in hosts
+        ],
+    }
+    print(json.dumps(payload, indent=2))
+    return 0
+
+
+def command_uninstall_host(args: argparse.Namespace) -> int:
+    hosts = onboarding_hosts(args.host, current_host=args.current_host)
+    payload = {
+        "product": PRODUCT_NAME,
+        "server": mcp_server_spec(),
+        "results": [
+            uninstall_host(
+                host_name,
+                remove_skills=not args.skip_skills,
+                remove_mcp=not args.skip_mcp,
+                dry_run=bool(args.dry_run),
+            )
+            for host_name in hosts
+        ],
+    }
+    print(json.dumps(payload, indent=2))
+    return 0
+
+
+def command_acknowledge_host(args: argparse.Namespace) -> int:
+    hosts = onboarding_hosts(args.host, current_host=args.current_host)
+    state = load_onboarding_state()
+    for host_name in hosts:
+        entry = host_state(state, host_name)
+        entry["dismissed"] = True
+    save_onboarding_state(state)
+    print(json.dumps({"product": PRODUCT_NAME, "acknowledged_hosts": hosts}, indent=2))
+    return 0
+
+
+def command_install_self(args: argparse.Namespace) -> int:
+    venv_dir = Path(args.venv).expanduser().resolve()
+    created = False
+    if not venv_dir.exists():
+        import venv
+
+        venv.create(str(venv_dir), with_pip=True)
+        created = True
+    python = venv_dir / "bin" / "python"
+    import subprocess
+
+    install_steps: list[dict[str, object]] = []
+
+    def run_install(command: list[str]) -> None:
+        completed = subprocess.run(command, check=False, capture_output=True, text=True)
+        install_steps.append(
+            {
+                "command": command,
+                "returncode": completed.returncode,
+                "stdout_tail": completed.stdout[-500:],
+                "stderr_tail": completed.stderr[-500:],
+            }
+        )
+        if completed.returncode != 0:
+            fail("install-self failed", details=[json.dumps(install_steps[-1], indent=2)])
+
+    run_install([str(python), "-m", "pip", "install", "--upgrade", "pip"])
+    run_install([str(python), "-m", "pip", "install", "-e", str(REPO_ROOT)])
+    payload = {
+        "product": PRODUCT_NAME,
+        "venv": str(venv_dir),
+        "created": created,
+        "install_steps": install_steps,
+        "next_steps": [
+            f"source {venv_dir}/bin/activate",
+            f"{venv_dir}/bin/relaykit --version",
+        ],
+    }
+    if args.host or args.current_host:
+        hosts = onboarding_hosts(args.host, current_host=args.current_host)
+        payload["host_install"] = [
+            bootstrap_host(
+                host_name,
+                install_skills=not args.skip_skills,
+                configure_mcp=not args.skip_mcp,
+                force=args.force,
+                dry_run=False,
+            )
+            for host_name in hosts
+        ]
+    print(json.dumps(payload, indent=2))
+    return 0
+
+
 def command_doctor(args: argparse.Namespace) -> int:
     registry = load_registry()
     registry_issues = validate_registry(registry)
@@ -1533,6 +2029,8 @@ def command_doctor(args: argparse.Namespace) -> int:
         "persona_layer": persona_layer_summary(registry),
         "next_actions": next_actions,
     }
+    if args.host or args.current_host:
+        attach_host_onboarding(payload, requested_hosts=args.host, current_host=args.current_host, auto_detect=False)
     print(json.dumps(payload, indent=2))
     has_blockers = bool(registry_issues or workspace_issues or project_payload["status"] == "invalid")
     return 1 if has_blockers else 0
@@ -1837,14 +2335,14 @@ def add_task_context_arguments(parser: argparse.ArgumentParser) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="RelayKit: task-first intake, setup recommendation, and continuation for OperatorProtocol, with advanced prompt-stack tools for power users."
+        description="RelayKit: harness augmentation for multi-tool, human-in-the-loop parallel execution, with task intake and advanced prompt-stack tools."
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {VERSION}")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     parser_start_task = subparsers.add_parser(
         "start-task",
-        help="Start the task-first RelayKit flow and return the next clarification question or recommendation.",
+        help="Start a RelayKit intake flow for a multi-harness task and return the next clarification question or recommendation.",
     )
     add_task_context_arguments(parser_start_task)
     parser_start_task.add_argument("--task", required=True)
@@ -1854,7 +2352,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser_answer_task = subparsers.add_parser(
         "answer-task",
-        help="Answer the current RelayKit clarification question for a task.",
+        help="Answer the current RelayKit clarification question for a harness-augmentation task.",
     )
     add_task_context_arguments(parser_answer_task)
     parser_answer_task.add_argument("--task-id", required=True)
@@ -1865,7 +2363,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser_show_task = subparsers.add_parser(
         "show-task",
-        help="Show the current state of a RelayKit task instance.",
+        help="Show the current state of a RelayKit task and lane-planning instance.",
     )
     add_task_context_arguments(parser_show_task)
     parser_show_task.add_argument("--task-id", required=True)
@@ -1874,7 +2372,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser_confirm_task = subparsers.add_parser(
         "confirm-task",
-        help="Accept a RelayKit recommendation or request changes.",
+        help="Accept a RelayKit lane recommendation or request changes.",
     )
     add_task_context_arguments(parser_confirm_task)
     parser_confirm_task.add_argument("--task-id", required=True)
@@ -1884,7 +2382,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser_checkpoint_task = subparsers.add_parser(
         "checkpoint-task",
-        help="Record a checkpoint for a full-mode RelayKit task.",
+        help="Record a checkpoint for a RelayKit task that is running across one or more lanes.",
     )
     add_task_context_arguments(parser_checkpoint_task)
     parser_checkpoint_task.add_argument("--task-id", required=True)
@@ -1906,7 +2404,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser_resume_task = subparsers.add_parser(
         "resume-task",
-        help="Resume a RelayKit task and get continuation guidance.",
+        help="Resume a RelayKit task and get continuation guidance for the active lanes.",
     )
     add_task_context_arguments(parser_resume_task)
     parser_resume_task.add_argument("--task-id", required=True)
@@ -1924,7 +2422,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser_reflect_task = subparsers.add_parser(
         "reflect-task",
-        help="Propose or record a post-task RelayKit reflection and learning update.",
+        help="Propose or record a post-task RelayKit reflection about lane split, tool fit, and overhead.",
     )
     add_task_context_arguments(parser_reflect_task)
     parser_reflect_task.add_argument("--task-id", required=True)
@@ -1948,7 +2446,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser_advanced = subparsers.add_parser(
         "advanced",
-        help="Power-user preset and prompt-stack tools.",
+        help="Power-user lane, preset, and prompt-stack tools.",
     )
     advanced_subparsers = parser_advanced.add_subparsers(dest="advanced_command", required=True)
 
@@ -2029,6 +2527,57 @@ def build_parser() -> argparse.ArgumentParser:
     add_stack_arguments(parser_render)
     parser_render.set_defaults(func=lambda args: command_stack(argparse.Namespace(**{**vars(args), "format": "markdown"})))
 
+    parser_host_status = subparsers.add_parser(
+        "host-status",
+        help="Report whether a host is ready for RelayKit harness augmentation and return onboarding actions.",
+    )
+    parser_host_status.add_argument("--host", action="append")
+    parser_host_status.add_argument("--current-host", action="store_true")
+    parser_host_status.set_defaults(func=command_host_status)
+
+    parser_bootstrap_host = subparsers.add_parser(
+        "bootstrap-host",
+        help="Install RelayKit skills and supported host wiring for one or more harnesses.",
+    )
+    parser_bootstrap_host.add_argument("--host", action="append")
+    parser_bootstrap_host.add_argument("--current-host", action="store_true")
+    parser_bootstrap_host.add_argument("--skip-skills", action="store_true")
+    parser_bootstrap_host.add_argument("--skip-mcp", action="store_true")
+    parser_bootstrap_host.add_argument("--dry-run", action="store_true")
+    parser_bootstrap_host.add_argument("--force", action="store_true")
+    parser_bootstrap_host.set_defaults(func=command_bootstrap_host)
+
+    parser_uninstall_host = subparsers.add_parser(
+        "uninstall-host",
+        help="Remove RelayKit skills and supported host wiring for one or more harnesses.",
+    )
+    parser_uninstall_host.add_argument("--host", action="append")
+    parser_uninstall_host.add_argument("--current-host", action="store_true")
+    parser_uninstall_host.add_argument("--skip-skills", action="store_true")
+    parser_uninstall_host.add_argument("--skip-mcp", action="store_true")
+    parser_uninstall_host.add_argument("--dry-run", action="store_true")
+    parser_uninstall_host.set_defaults(func=command_uninstall_host)
+
+    parser_ack_host = subparsers.add_parser(
+        "acknowledge-host",
+        help="Record that harness onboarding was offered and explicitly deferred.",
+    )
+    parser_ack_host.add_argument("--host", action="append")
+    parser_ack_host.add_argument("--current-host", action="store_true")
+    parser_ack_host.set_defaults(func=command_acknowledge_host)
+
+    parser_install_self = subparsers.add_parser(
+        "install-self",
+        help="Create a local venv, install RelayKit, and optionally wire supported harnesses.",
+    )
+    parser_install_self.add_argument("--venv", default=str(REPO_ROOT / ".venv"))
+    parser_install_self.add_argument("--host", action="append")
+    parser_install_self.add_argument("--current-host", action="store_true")
+    parser_install_self.add_argument("--skip-skills", action="store_true")
+    parser_install_self.add_argument("--skip-mcp", action="store_true")
+    parser_install_self.add_argument("--force", action="store_true")
+    parser_install_self.set_defaults(func=command_install_self)
+
     parser_doctor = subparsers.add_parser(
         "doctor",
         help="Validate the public runtime surface and the current workspace or project profiles.",
@@ -2037,6 +2586,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser_doctor.add_argument("--project-root")
     parser_doctor.add_argument("--workspace-profile")
     parser_doctor.add_argument("--project-profile")
+    parser_doctor.add_argument("--host", action="append")
+    parser_doctor.add_argument("--current-host", action="store_true")
     parser_doctor.set_defaults(func=command_doctor)
 
     return parser

@@ -1,14 +1,16 @@
 # Core Concepts
 
+RelayKit is a harness-augmentation layer. Its job is not to replace Codex, Claude Code, Gemini CLI, or Antigravity. Its job is to make those harnesses behave like coordinated lanes under one operator.
+
 ## Tasks
 
-A task is a piece of work you describe in plain text. RelayKit clarifies it, classifies it, and recommends a setup.
+A task is a piece of work you describe in plain text. RelayKit clarifies it, classifies it, and recommends the smallest lane setup likely to work.
 
 Tasks have two dimensions:
 - **Solo or coordinated** — one tool or multiple tools working together
 - **Lean or full** — ephemeral state or file-backed checkpoints
 
-All four combinations are valid. RelayKit picks the smallest setup likely to work well.
+All four combinations are valid. RelayKit picks the smallest setup likely to work well while preserving operator control.
 
 ## Roles
 
@@ -27,11 +29,11 @@ Roles are not permanently tied to tools or models.
 
 ## Lanes
 
-A lane binds a role to a concrete execution slice: tool + model + capabilities + prompt stack. Lanes are the unit that gets assigned.
+A lane binds a role to a concrete execution slice: harness + model + capabilities + prompt stack. Lanes are the unit that gets assigned.
 
 Essential lane fields:
 - `lane_id` — stable identifier
-- `host` — the tool surface (codex, claude-code, gemini-cli, etc.)
+- `host` — the harness surface (codex, claude-code, gemini-cli, antigravity, etc.)
 - `model` — the model running in that host
 - `role` — the job this lane owns
 
@@ -39,9 +41,9 @@ Optional lane fields: `reasoning_effort`, `capabilities`, `credit_pool`, `person
 
 ## Hosts
 
-A host is a tool surface that can run work: Codex, Claude Code, Gemini CLI, Antigravity, or any file-based skill host.
+A host is a harness surface that can run work: Codex, Claude Code, Gemini CLI, Antigravity, or any file-based skill host.
 
-The backend stays host-neutral. Host-specific concerns (prompt phrasing, capability quirks) stay in configuration.
+The backend stays host-neutral. Harness-specific concerns like prompt phrasing, capability quirks, and wiring stay in configuration.
 
 ## Checkpoints
 
@@ -55,13 +57,13 @@ Checkpoint outcomes: `on_track`, `blocked`, `needs_reroute`, `ready_for_next_pha
 
 ## Task Parts
 
-When RelayKit recommends a coordinated setup, the task is split into parts. Each part gets its own lane assignment, objective, and optional persona.
+When RelayKit recommends a coordinated setup, the task is split into parts. Each part gets its own lane assignment, objective, and optional persona so multiple harnesses can run in parallel without losing role clarity.
 
 The default second part, when coordination is justified, is critique.
 
 ## Presets
 
-Presets are named lane maps for common routing patterns. They're starting points, not rules — any task can override a preset.
+Presets are named lane maps for common multi-harness patterns. They're starting points, not rules; any task can override a preset.
 
 ## Artifacts
 

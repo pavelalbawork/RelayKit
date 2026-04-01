@@ -11,14 +11,14 @@
 - **personas** — optional style/expertise overlays
 - **defaults** — profile directory names, default preset, persona mode
 
-Edit this file to match your available tools and subscriptions.
+Edit this file to match your available harnesses, models, and subscriptions.
 
 ## Workspace Profile
 
 Created by `relaykit init-workspace`. Stored at `.relaykit/workspace-profile.json`.
 
 Contains:
-- Available hosts and models
+- Available harnesses and models
 - Default preset
 - Default personas
 - Lane overrides
@@ -37,7 +37,7 @@ Presets are starting-point lane maps. The registry ships with examples:
 
 | Preset | Intent |
 |---|---|
-| `balanced-default` | Planning + critique on Claude, execution on Codex |
+| `balanced-default` | Human-directed multi-harness default: planning on Claude, execution on Codex |
 | `cost-aware` | Minimize premium credits |
 | `custom` | Empty — define your own topology |
 
@@ -55,4 +55,4 @@ RelayKit learns from reflections:
 - `.relaykit/learning-log.jsonl` — raw append-only log
 - `.relaykit/learned-tendencies.json` — regenerated summary
 
-Learning is advisory. It influences recommendations but never silently rewrites defaults.
+Learning is advisory. It influences lane recommendations but never silently rewrites defaults.

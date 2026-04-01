@@ -1,17 +1,97 @@
 # RelayKit
 
-Task-first routing for multi-tool AI workflows.
+Harness augmentation for multi-tool, human-in-the-loop parallel execution.
 
-RelayKit helps you describe a task, get a setup recommendation (which tools, models, and roles to use), and then execute with checkpoints, handoffs, and learning — across Codex, Claude Code, Gemini CLI, Antigravity, or any file-based skill host.
+RelayKit augments existing harnesses like Codex, Claude Code, Gemini CLI, and Antigravity so one operator can run parallel lanes, assign deliberate roles, and keep the human in charge of coordination instead of treating every tool as a generic assistant.
+
+Task intake, lane recommendation, onboarding, checkpoints, handoffs, and learning are the main mechanisms. They exist to make existing harnesses behave like one operator-directed system.
 
 ## Install
 
+**Recommended — `pipx` (global, no activation needed):**
+
 ```bash
+pipx install -e /path/to/relaykit
+relaykit --version
+```
+
+`pipx` installs into an isolated environment and puts `relaykit` and `relaykit-mcp` on your PATH globally. No venv activation, works from any directory or shell.
+
+**Skills only — zero dependencies (Claude Code):**
+
+```bash
+cp -r skills/ ~/.claude/skills/
+```
+
+Copies the skill surface directly. No Python required. Use this if you only need RelayKit skills in Claude Code and don't need the CLI or MCP server.
+
+**Manual venv — fallback if `pipx` is unavailable:**
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -e .
 relaykit --version
 ```
 
+With the venv flow, use the full venv path in any MCP config: `.venv/bin/relaykit-mcp`.
+
+## Harness Setup
+
+After install, run one command to wire your harnesses. RelayKit detects what's missing and asks before touching anything:
+
+```bash
+relaykit bootstrap-host --current-host
+```
+
+To preview changes without applying them:
+
+```bash
+relaykit bootstrap-host --current-host --dry-run
+```
+
+Other onboarding commands:
+
+```bash
+relaykit host-status --current-host        # check what's wired and what's missing
+relaykit acknowledge-host --current-host   # defer onboarding without being asked again
+relaykit uninstall-host --current-host     # remove RelayKit-managed wiring
+relaykit doctor --current-host             # validate the full setup
+```
+
+## MCP Server
+
+If your host supports MCP, add this to its config:
+
+```json
+{
+  "mcpServers": {
+    "relaykit": {
+      "command": "relaykit-mcp"
+    }
+  }
+}
+```
+
+`relaykit-mcp` is registered as an entry point during install — no path needed. It is a long-lived stdio server. `relaykit-mcp --help` and `relaykit-mcp --version` are safe to run; no arguments starts the server.
+
+If you installed via venv instead of `pipx`, use the full path:
+
+```json
+{
+  "mcpServers": {
+    "relaykit": {
+      "command": "/path/to/relaykit/.venv/bin/relaykit-mcp"
+    }
+  }
+}
+```
+
+`bootstrap-host` can write this config automatically — run it after install and it handles the wiring.
+
 ## Quick Start
+
+Use RelayKit when you want multiple harnesses to behave like coordinated lanes in one human-directed system.
 
 Start a task:
 
@@ -39,22 +119,7 @@ relaykit resume-task --workspace-root . --task-id <id>
 relaykit reflect-task --workspace-root . --task-id <id> --split-worth-it yes --tool-fit good
 ```
 
-## MCP Server
-
-Use RelayKit from any MCP-capable host:
-
-```json
-{
-  "mcpServers": {
-    "relaykit": {
-      "command": "python3",
-      "args": ["/path/to/relaykit/mcp/relaykit/server.py"]
-    }
-  }
-}
-```
-
-## Optional Workspace Setup
+## Workspace Setup
 
 Save persistent defaults so RelayKit knows your available tools and models:
 
@@ -63,13 +128,22 @@ relaykit init-workspace --workspace-root . --start-with-defaults
 relaykit doctor --workspace-root .
 ```
 
+## Example
+
+See the [end-to-end walkthrough](examples/basic-workspace/WALKTHROUGH.md) for a full task lifecycle: intake → clarification → recommendation → builder lane → checkpoint → reflect.
+
 ## Documentation
 
+- [Docs Home](docs/index.md) — narrative and reading order
+- [RelayKit vs RelayPack](docs/comparison.md) — product options and practical split
 - [Core Concepts](docs/concepts.md) — tasks, roles, lanes, hosts, checkpoints
 - [Commands](docs/commands.md) — full CLI reference
 - [Configuration](docs/configuration.md) — registry, profiles, presets
 - [Skills](docs/skills.md) — portable role skills and how to use them
 - [Personas](personas/README.md) — optional style/expertise overlays
+- [Messaging](MESSAGING.md) — canonical positioning language
+- [Landing Copy](LANDING_COPY.md) — website-ready hero, subhead, and blurb
+- [GitHub Metadata](GITHUB_METADATA.md) — suggested repo description, topics, and blurbs
 
 ## Requirements
 

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "relaykit"
 version = "0.3.0"
-description = "Task-first multi-tool routing, launch, and continuation for agentic workflows."
+description = "Harness augmentation for multi-tool, human-in-the-loop parallel execution across Codex, Claude Code, Gemini CLI, and Antigravity."
 readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "MIT"}

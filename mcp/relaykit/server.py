@@ -204,7 +204,7 @@ def build_doctor_payload(arguments: dict[str, Any]) -> dict[str, Any]:
             "relaykit init-project "
             f"--project-root {Path(arguments['project_root']).resolve()} --use-workspace-defaults"
         )
-    return {
+    payload = {
         "product": "RelayKit",
         "registry": {
             "status": "ok" if not registry_issues else "invalid",
@@ -220,10 +220,77 @@ def build_doctor_payload(arguments: dict[str, Any]) -> dict[str, Any]:
         "persona_layer": relaykit.persona_layer_summary(registry),
         "next_actions": next_actions,
     }
+    if arguments.get("host") or arguments.get("current_host"):
+        hosts = relaykit.onboarding_hosts(arguments.get("host"), current_host=bool(arguments.get("current_host")))
+        payload["host_onboarding"] = {
+            "server": relaykit.mcp_server_spec(),
+            "hosts": [relaykit.host_onboarding_status(host_name) for host_name in hosts],
+        }
+    return payload
 
 
 def tool_doctor(arguments: dict[str, Any]) -> dict[str, Any]:
     payload = build_doctor_payload(arguments)
+    return make_text_result(json_text(payload), structured=payload)
+
+
+def tool_host_status(arguments: dict[str, Any]) -> dict[str, Any]:
+    hosts = relaykit.onboarding_hosts(arguments.get("host"), current_host=bool(arguments.get("current_host")))
+    hosts_payload = [relaykit.host_onboarding_status(host_name) for host_name in hosts]
+    payload = {
+        "product": relaykit.PRODUCT_NAME,
+        "server": relaykit.mcp_server_spec(),
+        "hosts": hosts_payload,
+        "actions": relaykit.build_onboarding_actions(hosts_payload),
+    }
+    return make_text_result(json_text(payload), structured=payload)
+
+
+def tool_bootstrap_host(arguments: dict[str, Any]) -> dict[str, Any]:
+    hosts = relaykit.onboarding_hosts(arguments.get("host"), current_host=bool(arguments.get("current_host")))
+    payload = {
+        "product": relaykit.PRODUCT_NAME,
+        "server": relaykit.mcp_server_spec(),
+        "results": [
+            relaykit.bootstrap_host(
+                host_name,
+                install_skills=not bool(arguments.get("skip_skills")),
+                configure_mcp=not bool(arguments.get("skip_mcp")),
+                force=bool(arguments.get("force")),
+                dry_run=bool(arguments.get("dry_run")),
+            )
+            for host_name in hosts
+        ],
+    }
+    return make_text_result(json_text(payload), structured=payload)
+
+
+def tool_uninstall_host(arguments: dict[str, Any]) -> dict[str, Any]:
+    hosts = relaykit.onboarding_hosts(arguments.get("host"), current_host=bool(arguments.get("current_host")))
+    payload = {
+        "product": relaykit.PRODUCT_NAME,
+        "server": relaykit.mcp_server_spec(),
+        "results": [
+            relaykit.uninstall_host(
+                host_name,
+                remove_skills=not bool(arguments.get("skip_skills")),
+                remove_mcp=not bool(arguments.get("skip_mcp")),
+                dry_run=bool(arguments.get("dry_run")),
+            )
+            for host_name in hosts
+        ],
+    }
+    return make_text_result(json_text(payload), structured=payload)
+
+
+def tool_acknowledge_host(arguments: dict[str, Any]) -> dict[str, Any]:
+    hosts = relaykit.onboarding_hosts(arguments.get("host"), current_host=bool(arguments.get("current_host")))
+    state = relaykit.load_onboarding_state()
+    for host_name in hosts:
+        entry = relaykit.host_state(state, host_name)
+        entry["dismissed"] = True
+    relaykit.save_onboarding_state(state)
+    payload = {"product": relaykit.PRODUCT_NAME, "acknowledged_hosts": hosts}
     return make_text_result(json_text(payload), structured=payload)
 
 
@@ -633,7 +700,7 @@ def tool_reflect_task(arguments: dict[str, Any]) -> dict[str, Any]:
 
 TOOLS: dict[str, dict[str, Any]] = {
     "relaykit_doctor": {
-        "description": "Validate the RelayKit runtime surface and inspect workspace or project profiles.",
+        "description": "Validate the RelayKit harness-augmentation runtime and inspect workspace or project profiles.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -643,10 +710,67 @@ TOOLS: dict[str, dict[str, Any]] = {
                 "project_profile": {"type": "string"},
                 "local_wrapper_root": {"type": "string"},
                 "external_control_plane": {"type": "string"},
+                "host": {"type": "array", "items": {"type": "string"}},
+                "current_host": {"type": "boolean"},
             },
             "additionalProperties": False,
         },
         "handler": tool_doctor,
+    },
+    "relaykit_host_status": {
+        "description": "Report whether one or more harnesses are ready for RelayKit and return recommended onboarding actions.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "host": {"type": "array", "items": {"type": "string"}},
+                "current_host": {"type": "boolean"},
+            },
+            "additionalProperties": False,
+        },
+        "handler": tool_host_status,
+    },
+    "relaykit_bootstrap_host": {
+        "description": "Install RelayKit skills and auto-configurable wiring for one or more supported harnesses.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "host": {"type": "array", "items": {"type": "string"}},
+                "current_host": {"type": "boolean"},
+                "skip_skills": {"type": "boolean"},
+                "skip_mcp": {"type": "boolean"},
+                "dry_run": {"type": "boolean"},
+                "force": {"type": "boolean"},
+            },
+            "additionalProperties": False,
+        },
+        "handler": tool_bootstrap_host,
+    },
+    "relaykit_uninstall_host": {
+        "description": "Remove RelayKit skills and auto-configurable wiring for one or more supported harnesses.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "host": {"type": "array", "items": {"type": "string"}},
+                "current_host": {"type": "boolean"},
+                "skip_skills": {"type": "boolean"},
+                "skip_mcp": {"type": "boolean"},
+                "dry_run": {"type": "boolean"}
+            },
+            "additionalProperties": False,
+        },
+        "handler": tool_uninstall_host,
+    },
+    "relaykit_acknowledge_host": {
+        "description": "Record that harness onboarding was offered and explicitly deferred for one or more harnesses.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "host": {"type": "array", "items": {"type": "string"}},
+                "current_host": {"type": "boolean"}
+            },
+            "additionalProperties": False,
+        },
+        "handler": tool_acknowledge_host,
     },
     "relaykit_list": {
         "description": "List registered skills, hosts, models, presets, personas, or preset lanes.",
@@ -792,7 +916,7 @@ TOOLS: dict[str, dict[str, Any]] = {
         "handler": tool_init_persona,
     },
     "relaykit_start_task": {
-        "description": "Start a task-first RelayKit flow and return the next clarification question or recommendation.",
+        "description": "Start a RelayKit intake flow for a multi-harness task and return the next clarification question or recommendation.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -831,7 +955,7 @@ TOOLS: dict[str, dict[str, Any]] = {
         "handler": tool_answer_task,
     },
     "relaykit_show_task": {
-        "description": "Show the current state of a RelayKit task instance, with optional debug reasoning layers.",
+        "description": "Show the current state of a RelayKit task and lane-planning instance, with optional debug reasoning layers.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -849,7 +973,7 @@ TOOLS: dict[str, dict[str, Any]] = {
         "handler": tool_show_task,
     },
     "relaykit_confirm_task": {
-        "description": "Accept a RelayKit recommendation or request setup changes.",
+        "description": "Accept a RelayKit lane recommendation or request setup changes.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -1044,6 +1168,26 @@ def handle_request(request: dict[str, Any]) -> None:
 
 
 def main() -> int:
+    argv = sys.argv[1:]
+    if any(arg in {"-h", "--help", "help"} for arg in argv):
+        print(f"{SERVER_INFO['title']} ({SERVER_INFO['name']})")
+        print("Usage: relaykit-mcp")
+        print("Runs a long-lived MCP server over stdio.")
+        print("Use this as an MCP command, not as an interactive shell command.")
+        print("Flags:")
+        print("  --help     Show this message and exit.")
+        print("  --version  Show the server version and exit.")
+        return 0
+    if "--version" in argv:
+        print(f"{SERVER_INFO['name']} {SERVER_INFO['version']}")
+        return 0
+    if argv:
+        print(
+            f"{SERVER_INFO['name']}: unexpected arguments: {' '.join(argv)}",
+            file=sys.stderr,
+        )
+        print("Run with --help for usage.", file=sys.stderr)
+        return 2
     while True:
         request = read_message()
         if request is None:

@@ -4,15 +4,15 @@
 
 | Command | Purpose |
 |---|---|
-| `start-task` | Begin a new task from free text |
+| `start-task` | Begin a new multi-harness task from free text |
 | `answer-task` | Answer a clarification question |
-| `confirm-task` | Accept or modify the recommended setup |
-| `show-task` | View current task state |
+| `confirm-task` | Accept or modify the recommended lane setup |
+| `show-task` | View current task state and lane assignments |
 | `checkpoint-task` | Record progress at a named milestone |
 | `advance-task` | Apply a setup or phase change after checkpoint |
-| `resume-task` | Resume a paused task with context |
+| `resume-task` | Resume a paused task with context for the active lanes |
 | `render-task-part` | Render the launch bundle for one task part |
-| `reflect-task` | Post-task learning: was the setup worth it? |
+| `reflect-task` | Post-task learning: was the multi-harness setup worth it? |
 
 ## Setup
 
@@ -21,7 +21,12 @@
 | `init-workspace` | Create a persistent workspace profile |
 | `init-project` | Create a project profile inheriting workspace defaults |
 | `init-persona` | Scaffold a new persona file |
-| `doctor` | Validate registry, profiles, and schemas |
+| `host-status` | Check whether a harness is ready and get onboarding actions |
+| `bootstrap-host` | Install RelayKit skills and supported harness wiring |
+| `uninstall-host` | Remove RelayKit-managed harness wiring |
+| `acknowledge-host` | Record that onboarding was offered and deferred |
+| `install-self` | Create a venv, install RelayKit, and optionally wire harnesses |
+| `doctor` | Validate registry, profiles, schemas, and optional host readiness |
 
 ## Inspection
 
@@ -38,7 +43,7 @@
 | `advanced stack` | Resolve the prompt stack for a lane directly |
 | `advanced render-prompt-stack` | Render a compiled prompt stack as markdown |
 
-These bypass the task-first flow. Use them only when you already know the exact lane assignment.
+These bypass the intake flow. Use them only when you already know the exact lane assignment.
 
 ## Common Workflows
 
@@ -64,4 +69,4 @@ relaykit reflect-task --workspace-root . --task-id <id> --split-worth-it yes --t
 
 The MCP server exposes the same commands as tools prefixed with `relaykit_`:
 
-`relaykit_start_task`, `relaykit_answer_task`, `relaykit_confirm_task`, `relaykit_show_task`, `relaykit_checkpoint_task`, `relaykit_advance_task`, `relaykit_resume_task`, `relaykit_render_task_part`, `relaykit_reflect_task`, `relaykit_doctor`, `relaykit_list`, `relaykit_preset`, `relaykit_stack`, `relaykit_render_prompt_stack`, `relaykit_init_workspace`, `relaykit_init_project`, `relaykit_init_persona`.
+`relaykit_start_task`, `relaykit_answer_task`, `relaykit_confirm_task`, `relaykit_show_task`, `relaykit_checkpoint_task`, `relaykit_advance_task`, `relaykit_resume_task`, `relaykit_render_task_part`, `relaykit_reflect_task`, `relaykit_host_status`, `relaykit_bootstrap_host`, `relaykit_uninstall_host`, `relaykit_acknowledge_host`, `relaykit_doctor`, `relaykit_list`, `relaykit_preset`, `relaykit_stack`, `relaykit_render_prompt_stack`, `relaykit_init_workspace`, `relaykit_init_project`, `relaykit_init_persona`.
