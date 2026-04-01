@@ -13,6 +13,7 @@ Task intake, lane recommendation, onboarding, checkpoints, handoffs, and learnin
 ```bash
 pipx install -e /path/to/relaykit
 relaykit --version
+relaykit-mcp --help
 ```
 
 `pipx` installs into an isolated environment and puts `relaykit` and `relaykit-mcp` on your PATH globally. No venv activation, works from any directory or shell.
@@ -25,13 +26,22 @@ cp -r skills/ ~/.claude/skills/
 
 Copies the skill surface directly. No Python required. Use this if you only need RelayKit skills in Claude Code and don't need the CLI or MCP server.
 
-**Manual venv — fallback if `pipx` is unavailable:**
+**Fastest fallback on Homebrew Python — one command, venv-safe:**
+
+```bash
+python3 scripts/relaykit.py install-self
+```
+
+Use this when `pipx` is unavailable or you hit the Homebrew Python `externally-managed-environment` error.
+
+**Manual venv — explicit fallback:**
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
 relaykit --version
+relaykit-mcp --help
 ```
 
 With the venv flow, use the full venv path in any MCP config: `.venv/bin/relaykit-mcp`.
@@ -57,6 +67,12 @@ relaykit host-status --current-host        # check what's wired and what's missi
 relaykit acknowledge-host --current-host   # defer onboarding without being asked again
 relaykit uninstall-host --current-host     # remove RelayKit-managed wiring
 relaykit doctor --current-host             # validate the full setup
+```
+
+Fastest full local bring-up when you also want onboarding:
+
+```bash
+python3 scripts/relaykit.py install-self --current-host --force
 ```
 
 ## MCP Server
@@ -87,7 +103,7 @@ If you installed via venv instead of `pipx`, use the full path:
 }
 ```
 
-`bootstrap-host` can write this config automatically — run it after install and it handles the wiring.
+`bootstrap-host` can write this config automatically for supported hosts, so manual MCP editing should be the exception, not the default.
 
 ## Quick Start
 

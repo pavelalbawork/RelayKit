@@ -54,6 +54,8 @@ MCP_SERVER_PATH = (REPO_ROOT / "mcp" / "relaykit" / "server.py").resolve()
 MCP_SERVER_COMMAND = sys.executable
 SKILLS_ROOT = REPO_ROOT / "skills"
 ONBOARDING_STATE_PATH = Path("~/.relaykit/relaykit-onboarding-state.json")
+SUPPORTED_MCP_AUTO_HOSTS = tuple(HOST_MCP_TARGETS.keys())
+SUPPORTED_SKILL_AUTO_HOSTS = tuple(HOST_SKILL_HOMES.keys())
 
 
 def fail(message: str, *, details: list[str] | None = None) -> None:
@@ -2538,6 +2540,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser_bootstrap_host = subparsers.add_parser(
         "bootstrap-host",
         help="Install RelayKit skills and supported host wiring for one or more harnesses.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "Install RelayKit-managed skills and host wiring. "
+            f"Supported hosts: {', '.join(SUPPORTED_ONBOARDING_HOSTS)}. "
+            f"Auto skill install is available for: {', '.join(SUPPORTED_SKILL_AUTO_HOSTS)}. "
+            f"Auto MCP wiring is available for: {', '.join(SUPPORTED_MCP_AUTO_HOSTS)}."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  relaykit bootstrap-host --current-host\n"
+            "  relaykit bootstrap-host --host codex --dry-run\n"
+            "  relaykit bootstrap-host --host codex --host antigravity --force"
+        ),
     )
     parser_bootstrap_host.add_argument("--host", action="append")
     parser_bootstrap_host.add_argument("--current-host", action="store_true")
@@ -2569,6 +2584,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser_install_self = subparsers.add_parser(
         "install-self",
         help="Create a local venv, install RelayKit, and optionally wire supported harnesses.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "Create or reuse a local virtual environment, install RelayKit into it, "
+            "and optionally run harness onboarding in the same step. "
+            "This is the safest default on Homebrew Python systems that reject "
+            "ambient pip installs with the externally-managed-environment error."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  relaykit install-self\n"
+            "  relaykit install-self --current-host --force\n"
+            "  relaykit install-self --venv /tmp/relaykit-demo/.venv --host codex"
+        ),
     )
     parser_install_self.add_argument("--venv", default=str(REPO_ROOT / ".venv"))
     parser_install_self.add_argument("--host", action="append")

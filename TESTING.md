@@ -16,7 +16,16 @@ relaykit --version
 relaykit-mcp --help
 ```
 
-**Fallback — venv:**
+**Fallback — one command, venv-safe:**
+
+```bash
+cd /path/to/relaykit
+python3 scripts/relaykit.py install-self
+```
+
+Use this when `pipx` is unavailable or Homebrew Python blocks ambient package installation.
+
+**Fallback — manual venv:**
 
 ```bash
 cd /path/to/relaykit
