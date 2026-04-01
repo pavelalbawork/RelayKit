@@ -14,6 +14,8 @@ linked_artifacts:
 
 # Handoff Card
 
+Target: 300–1200 tokens. If longer, the work is probably underspecified — decompose first.
+
 ## Transfer
 
 - From tool:
@@ -51,6 +53,14 @@ linked_artifacts:
 ## Acceptance To Preserve
 
 - [Criterion]
+
+## What Has Already Been Tried
+
+- [Approach or fix attempted, with result]
+
+## Do-Not-Repeat List
+
+- [Failed approach the next tool should NOT retry]
 
 ## What's Next
 
