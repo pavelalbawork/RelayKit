@@ -137,6 +137,19 @@ def detect_current_host() -> str | None:
     return None
 
 
+def running_from_source_tree() -> bool:
+    argv0 = Path(sys.argv[0]).expanduser()
+    try:
+        resolved = argv0.resolve()
+    except OSError:
+        return False
+    try:
+        resolved.relative_to(REPO_ROOT)
+    except ValueError:
+        return False
+    return True
+
+
 def setup_hosts(requested_hosts: list[str] | None, *, current_host: bool) -> list[str]:
     if requested_hosts or current_host:
         return onboarding_hosts(requested_hosts, current_host=current_host)
@@ -155,7 +168,7 @@ def onboarding_hosts(requested_hosts: list[str] | None, *, current_host: bool) -
         detected = detect_current_host()
         if detected is None:
             fail(
-                "unable to detect the current host; pass --host explicitly or set RELAYKIT_HOST",
+                "unable to detect the current host; Codex auto-detection is built in, otherwise pass --host explicitly or set RELAYKIT_HOST",
             )
         hosts.append(detected)
     hosts.extend(requested_hosts or [])
@@ -171,6 +184,12 @@ def onboarding_hosts(requested_hosts: list[str] | None, *, current_host: bool) -
 
 
 def mcp_server_spec() -> dict[str, object]:
+    if os.environ.get("RELAYKIT_PREFER_SOURCE_MCP") == "1" or running_from_source_tree():
+        return {
+            "name": MCP_SERVER_NAME,
+            "command": MCP_SERVER_COMMAND,
+            "args": [str(MCP_SERVER_PATH)],
+        }
     entrypoint = shutil.which(MCP_SERVER_ENTRYPOINT)
     if entrypoint:
         return {
@@ -2360,7 +2379,7 @@ def build_install_self_payload(
 
     install_steps: list[dict[str, object]] = []
 
-    def run_install(command: list[str]) -> None:
+    def run_install(command: list[str]) -> subprocess.CompletedProcess[str]:
         completed = subprocess.run(command, check=False, capture_output=True, text=True)
         install_steps.append(
             {
@@ -2370,11 +2389,14 @@ def build_install_self_payload(
                 "stderr_tail": completed.stderr[-500:],
             }
         )
-        if completed.returncode != 0:
-            fail("install-self failed", details=[json.dumps(install_steps[-1], indent=2)])
+        return completed
 
-    run_install([str(python), "-m", "pip", "install", "--upgrade", "pip"])
-    run_install([str(python), "-m", "pip", "install", "-e", str(REPO_ROOT)])
+    install_result = run_install([str(python), "-m", "pip", "install", "-e", str(REPO_ROOT)])
+    if install_result.returncode != 0:
+        run_install([str(python), "-m", "pip", "install", "--upgrade", "pip"])
+        install_result = run_install([str(python), "-m", "pip", "install", "-e", str(REPO_ROOT)])
+        if install_result.returncode != 0:
+            fail("install-self failed", details=[json.dumps(install_steps[-1], indent=2)])
     payload = {
         "product": PRODUCT_NAME,
         "venv": str(venv_dir),
@@ -2952,7 +2974,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Report whether a host is ready for RelayKit harness augmentation and return onboarding actions.",
     )
     parser_host_status.add_argument("--host", action="append")
-    parser_host_status.add_argument("--current-host", action="store_true")
+    parser_host_status.add_argument(
+        "--current-host",
+        action="store_true",
+        help="Auto-detect the current host (Codex today, or use RELAYKIT_HOST to override).",
+    )
     parser_host_status.set_defaults(func=command_host_status)
 
     parser_bootstrap_host = subparsers.add_parser(
@@ -2973,7 +2999,11 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser_bootstrap_host.add_argument("--host", action="append")
-    parser_bootstrap_host.add_argument("--current-host", action="store_true")
+    parser_bootstrap_host.add_argument(
+        "--current-host",
+        action="store_true",
+        help="Auto-detect the current host (Codex today, or use RELAYKIT_HOST to override).",
+    )
     parser_bootstrap_host.add_argument("--skip-skills", action="store_true")
     parser_bootstrap_host.add_argument("--skip-mcp", action="store_true")
     parser_bootstrap_host.add_argument("--dry-run", action="store_true")
@@ -2997,7 +3027,11 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser_setup.add_argument("--host", action="append")
-    parser_setup.add_argument("--current-host", action="store_true")
+    parser_setup.add_argument(
+        "--current-host",
+        action="store_true",
+        help="Auto-detect the current host (Codex today, or use RELAYKIT_HOST to override).",
+    )
     parser_setup.add_argument("--workspace-root")
     parser_setup.add_argument("--skip-skills", action="store_true")
     parser_setup.add_argument("--skip-mcp", action="store_true")
@@ -3011,7 +3045,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Remove RelayKit skills and supported host wiring for one or more harnesses.",
     )
     parser_uninstall_host.add_argument("--host", action="append")
-    parser_uninstall_host.add_argument("--current-host", action="store_true")
+    parser_uninstall_host.add_argument(
+        "--current-host",
+        action="store_true",
+        help="Auto-detect the current host (Codex today, or use RELAYKIT_HOST to override).",
+    )
     parser_uninstall_host.add_argument("--skip-skills", action="store_true")
     parser_uninstall_host.add_argument("--skip-mcp", action="store_true")
     parser_uninstall_host.add_argument("--dry-run", action="store_true")
@@ -3022,7 +3060,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Record that harness onboarding was offered and explicitly deferred.",
     )
     parser_ack_host.add_argument("--host", action="append")
-    parser_ack_host.add_argument("--current-host", action="store_true")
+    parser_ack_host.add_argument(
+        "--current-host",
+        action="store_true",
+        help="Auto-detect the current host (Codex today, or use RELAYKIT_HOST to override).",
+    )
     parser_ack_host.set_defaults(func=command_acknowledge_host)
 
     parser_install_self = subparsers.add_parser(
@@ -3044,7 +3086,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser_install_self.add_argument("--venv", default=str(REPO_ROOT / ".venv"))
     parser_install_self.add_argument("--host", action="append")
-    parser_install_self.add_argument("--current-host", action="store_true")
+    parser_install_self.add_argument(
+        "--current-host",
+        action="store_true",
+        help="Auto-detect the current host (Codex today, or use RELAYKIT_HOST to override).",
+    )
     parser_install_self.add_argument("--skip-skills", action="store_true")
     parser_install_self.add_argument("--skip-mcp", action="store_true")
     parser_install_self.add_argument("--force", action="store_true")
@@ -3066,7 +3112,11 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser_smoke.add_argument("--host", action="append")
-    parser_smoke.add_argument("--current-host", action="store_true")
+    parser_smoke.add_argument(
+        "--current-host",
+        action="store_true",
+        help="Auto-detect the current host (Codex today, or use RELAYKIT_HOST to override).",
+    )
     parser_smoke.add_argument("--workspace-root")
     parser_smoke.add_argument("--force", action="store_true")
     parser_smoke.set_defaults(func=command_smoke)
@@ -3080,7 +3130,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser_doctor.add_argument("--workspace-profile")
     parser_doctor.add_argument("--project-profile")
     parser_doctor.add_argument("--host", action="append")
-    parser_doctor.add_argument("--current-host", action="store_true")
+    parser_doctor.add_argument(
+        "--current-host",
+        action="store_true",
+        help="Auto-detect the current host (Codex today, or use RELAYKIT_HOST to override).",
+    )
     parser_doctor.set_defaults(func=command_doctor)
 
     return parser

@@ -56,6 +56,8 @@ After install, run one command to wire your harness, run a safe local smoke test
 relaykit setup --current-host
 ```
 
+`--current-host` auto-detects Codex today. For Claude Code, Gemini CLI, and Antigravity, pass `--host` explicitly unless you export `RELAYKIT_HOST`.
+
 Supported auto-wiring targets currently include Codex, Claude Code, Gemini CLI, and Antigravity.
 
 To preview changes without applying them:

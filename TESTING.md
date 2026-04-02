@@ -132,7 +132,7 @@ Open Codex and run these MCP tool calls (or ask Codex to run them):
 4. Call relaykit_answer_task with:
    - workspace_root: "/tmp/relaykit-test"
    - task_id: <from step 2>
-   - skip: true
+   - skip_clarification: true
    Expected: Returns recommendation with archetype, setup, and task_parts
 
 5. Call relaykit_confirm_task with:
