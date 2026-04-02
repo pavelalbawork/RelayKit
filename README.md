@@ -26,7 +26,7 @@ The installed `relaykit-mcp` entry point is the preferred MCP launch path across
 cp -r skills/ ~/.claude/skills/
 ```
 
-Copies the skill surface directly. No Python required. Use this only if you want portable RelayKit skills without the CLI or MCP server. For Codex, Claude Code, Gemini CLI, and Antigravity, the normal `pipx` install plus `bootstrap-host` path is the preferred setup.
+Copies the skill surface directly. No Python required. Use this only if you want portable RelayKit skills without the CLI or MCP server. For Codex, Claude Code, Gemini CLI, and Antigravity, the normal `pipx` install plus `setup` path is the preferred setup.
 
 **Fastest fallback on Homebrew Python — one command, venv-safe:**
 
@@ -50,10 +50,10 @@ With the venv flow, use the full venv path in any MCP config: `.venv/bin/relayki
 
 ## Harness Setup
 
-After install, run one command to wire your harnesses. RelayKit detects what's missing and asks before touching anything:
+After install, run one command to wire your harness, run a safe local smoke test, and print the exact next prompt for that harness:
 
 ```bash
-relaykit bootstrap-host --current-host
+relaykit setup --current-host
 ```
 
 Supported auto-wiring targets currently include Codex, Claude Code, Gemini CLI, and Antigravity.
@@ -61,13 +61,20 @@ Supported auto-wiring targets currently include Codex, Claude Code, Gemini CLI, 
 To preview changes without applying them:
 
 ```bash
-relaykit bootstrap-host --current-host --dry-run
+relaykit setup --current-host --dry-run
+```
+
+To run the reusable local lifecycle proof by itself:
+
+```bash
+relaykit smoke --current-host
 ```
 
 Other onboarding commands:
 
 ```bash
 relaykit host-status --current-host        # check what's wired and what's missing
+relaykit setup --host codex                # bootstrap, smoke, and print the next Codex prompt
 relaykit acknowledge-host --current-host   # defer onboarding without being asked again
 relaykit uninstall-host --current-host     # remove RelayKit-managed wiring
 relaykit doctor --current-host             # validate the full setup
@@ -76,7 +83,8 @@ relaykit doctor --current-host             # validate the full setup
 Fastest full local bring-up when you also want onboarding:
 
 ```bash
-python3 scripts/relaykit.py install-self --current-host --force
+python3 scripts/relaykit.py install-self
+python3 scripts/relaykit.py setup --current-host --force
 ```
 
 ## MCP Server

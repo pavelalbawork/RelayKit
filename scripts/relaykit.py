@@ -60,6 +60,8 @@ SKILLS_ROOT = REPO_ROOT / "skills"
 ONBOARDING_STATE_PATH = Path("~/.relaykit/relaykit-onboarding-state.json")
 SUPPORTED_MCP_AUTO_HOSTS = tuple(HOST_MCP_TARGETS.keys())
 SUPPORTED_SKILL_AUTO_HOSTS = tuple(HOST_SKILL_HOMES.keys())
+SMOKE_TASK_TEXT = "Make a tiny login validation tweak and verify it"
+SMOKE_FIRST_ANSWER = "In scope: login validation only. Out of scope: backend and styling."
 
 
 def fail(message: str, *, details: list[str] | None = None) -> None:
@@ -133,6 +135,18 @@ def detect_current_host() -> str | None:
     return None
 
 
+def setup_hosts(requested_hosts: list[str] | None, *, current_host: bool) -> list[str]:
+    if requested_hosts or current_host:
+        return onboarding_hosts(requested_hosts, current_host=current_host)
+    detected = detect_current_host()
+    if detected:
+        return [detected]
+    fail(
+        "unable to choose a host for setup; pass --host explicitly or set RELAYKIT_HOST",
+        details=[f"supported hosts: {', '.join(SUPPORTED_ONBOARDING_HOSTS)}"],
+    )
+
+
 def onboarding_hosts(requested_hosts: list[str] | None, *, current_host: bool) -> list[str]:
     hosts: list[str] = []
     if current_host:
@@ -174,6 +188,53 @@ def mcp_server_spec() -> dict[str, object]:
         "command": MCP_SERVER_COMMAND,
         "args": [str(MCP_SERVER_PATH)],
     }
+
+
+def host_restart_hint(host_name: str) -> str:
+    hints = {
+        "codex": "Restart Codex so it reloads the RelayKit MCP server and tool catalog.",
+        "claude-code": "Restart Claude Code so it reloads the RelayKit MCP server and tool catalog.",
+        "gemini-cli": "Restart Gemini CLI so it reloads the RelayKit MCP server and tool catalog.",
+        "antigravity": "Restart Antigravity so it reloads the RelayKit MCP server and tool catalog.",
+    }
+    return hints[host_name]
+
+
+def first_use_prompt(host_name: str, workspace_root: Path) -> str:
+    label_map = {
+        "codex": "RelayKit",
+        "claude-code": "RelayKit",
+        "gemini-cli": "RelayKit",
+        "antigravity": "RelayKit",
+    }
+    label = label_map[host_name]
+    return (
+        f"Use {label} MCP tools directly. Do not use the relaykit CLI wrapper unless an MCP tool is missing.\n\n"
+        f"Run this smoke test in {workspace_root}:\n\n"
+        f"1. Call {label} Doctor with:\n"
+        f"   - workspace_root: {workspace_root}\n\n"
+        f"2. If workspace_profile.status is \"missing\", call {label} Init Workspace with:\n"
+        f"   - workspace_root: {workspace_root}\n\n"
+        f"3. Call {label} Start Task with:\n"
+        f"   - workspace_root: {workspace_root}\n"
+        f"   - task: \"{SMOKE_TASK_TEXT}\"\n\n"
+        f"4. Answer the first clarification with:\n"
+        f"   - \"{SMOKE_FIRST_ANSWER}\"\n\n"
+        f"5. Skip any remaining clarification.\n\n"
+        f"6. Call {label} Confirm Task and accept the recommendation.\n\n"
+        f"7. Call {label} Checkpoint Task with:\n"
+        f"   - notes: \"{host_name} MCP-only smoke checkpoint after confirmation.\"\n\n"
+        f"8. Call {label} Reflect Task with:\n"
+        f"   - split_worth_it: no\n"
+        f"   - tool_fit: good\n"
+        f"   - simpler_better: no\n"
+        f"   - apply: true\n\n"
+        "Return:\n"
+        "- whether each MCP call succeeded\n"
+        "- the task_id\n"
+        "- whether any CLI wrapper was used\n"
+        "- any error exactly as shown if something fails\n"
+    )
 
 
 def skill_names() -> list[str]:
@@ -1749,6 +1810,212 @@ def status_payload(path: Path | None, issues: list[str], *, optional: bool) -> d
     }
 
 
+def build_doctor_payload(
+    *,
+    workspace_root: Path,
+    project_root: Path | None = None,
+    workspace_profile_override: Path | None = None,
+    project_profile_override: Path | None = None,
+    requested_hosts: list[str] | None = None,
+    current_host: bool = False,
+) -> dict[str, object]:
+    registry = load_registry()
+    registry_issues = validate_registry(registry)
+
+    workspace_candidate = (
+        workspace_profile_override.resolve()
+        if workspace_profile_override
+        else workspace_profile_path(workspace_root, registry)
+    )
+    workspace_path, workspace_profile = load_optional_profile(workspace_candidate, PROFILE_KIND_WORKSPACE)
+    workspace_issues = (
+        ["workspace profile is missing; run RelayKit workspace onboarding"]
+        if workspace_profile is None
+        else validate_profile(
+            workspace_profile,
+            registry,
+            expected_kind=PROFILE_KIND_WORKSPACE,
+            base_preset=registry_defaults(registry)["default_preset"],
+            origin="workspace profile",
+        )
+    )
+
+    project_payload = status_payload(None, [], optional=True)
+    if project_root or project_profile_override:
+        resolved_project_root = project_root.resolve() if project_root else Path.cwd().resolve()
+        project_candidate = (
+            project_profile_override.resolve()
+            if project_profile_override
+            else project_profile_path(resolved_project_root, registry)
+        )
+        project_path, project_profile = load_optional_profile(project_candidate, PROFILE_KIND_PROJECT)
+        project_issues = (
+            []
+            if project_profile is None
+            else validate_profile(
+                project_profile,
+                registry,
+                expected_kind=PROFILE_KIND_PROJECT,
+                base_preset=project_base_preset(
+                    registry,
+                    workspace_profile=workspace_profile,
+                    project_profile=project_profile,
+                ),
+                origin="project profile",
+            )
+        )
+        project_payload = status_payload(project_path, project_issues, optional=True)
+
+    next_actions: list[str] = []
+    if workspace_profile is None:
+        next_actions.append(f"relaykit init-workspace --workspace-root {workspace_root}")
+    if project_root and project_payload["status"] == "missing":
+        next_actions.append(
+            "relaykit init-project "
+            f"--project-root {project_root.resolve()} --use-workspace-defaults"
+        )
+    payload: dict[str, object] = {
+        "product": PRODUCT_NAME,
+        "registry": {
+            "status": "ok" if not registry_issues else "invalid",
+            "path": str(REGISTRY_PATH),
+            "issues": registry_issues,
+        },
+        "workspace_profile": status_payload(workspace_path, workspace_issues, optional=False),
+        "project_profile": project_payload,
+        "schemas": {
+            "workspace_profile": str((SCHEMA_ROOT / "workspace-profile.schema.json").resolve()),
+            "project_profile": str((SCHEMA_ROOT / "project-profile.schema.json").resolve()),
+        },
+        "persona_layer": persona_layer_summary(registry),
+        "next_actions": next_actions,
+    }
+    if requested_hosts or current_host:
+        hosts = onboarding_hosts(requested_hosts, current_host=current_host)
+        payload["host_onboarding"] = {
+            "server": mcp_server_spec(),
+            "hosts": [host_onboarding_status(host_name) for host_name in hosts],
+        }
+    return payload
+
+
+def init_workspace_profile_payload(*, workspace_root: Path, force: bool = False) -> dict[str, object]:
+    registry = load_registry()
+    registry_issues = validate_registry(registry)
+    if registry_issues:
+        fail("registry validation failed", details=registry_issues)
+    path = workspace_profile_path(workspace_root, registry)
+    ensure_profile_write(path, force)
+    profile = default_workspace_profile(registry)
+    profile_issues = validate_profile(
+        profile,
+        registry,
+        expected_kind=PROFILE_KIND_WORKSPACE,
+        base_preset=registry_defaults(registry)["default_preset"],
+        origin="workspace profile",
+    )
+    if profile_issues:
+        fail("workspace profile is invalid", details=profile_issues)
+    write_json(path, profile)
+    return {"workspace_profile": str(path), "profile": profile}
+
+
+def smoke_workspace_root(host_name: str) -> Path:
+    slug = host_name.replace("-cli", "").replace("-", "-")
+    return Path("/private/tmp") / f"relaykit-{slug}-smoke"
+
+
+def run_smoke_flow(workspace_root: Path, *, host_name: str, force_workspace_init: bool = False) -> dict[str, object]:
+    registry = load_registry()
+    registry_issues = validate_registry(registry)
+    if registry_issues:
+        fail("registry validation failed", details=registry_issues)
+
+    results: list[dict[str, object]] = []
+    doctor_payload = build_doctor_payload(workspace_root=workspace_root)
+    doctor_status = doctor_payload["workspace_profile"]["status"]  # type: ignore[index]
+    results.append({"step": "doctor", "status": "succeeded", "workspace_profile_status": doctor_status})
+
+    if force_workspace_init or doctor_status == "missing":
+        init_payload = init_workspace_profile_payload(workspace_root=workspace_root, force=force_workspace_init)
+        results.append({"step": "init_workspace", "status": "succeeded", "workspace_profile": init_payload["workspace_profile"]})
+
+    workspace_profile_path_resolved = workspace_profile_path(workspace_root, registry)
+    workspace_profile = read_json(workspace_profile_path_resolved)
+
+    task_started = taskflow.start_task(
+        registry,
+        workspace_root=workspace_root,
+        project_root=None,
+        workspace_profile=workspace_profile,
+        project_profile=None,
+        task_text=SMOKE_TASK_TEXT,
+        task_scope=None,
+        allowed_hosts=None,
+        skip_clarification=False,
+    )
+    task_id = task_started["task_id"]
+    results.append({"step": "start_task", "status": "succeeded", "task_id": task_id})
+
+    task_answer = taskflow.answer_task(
+        registry,
+        root=taskflow.root_for_task(workspace_root, None, None),
+        task_id=task_id,
+        answer=SMOKE_FIRST_ANSWER,
+        question_id=None,
+        workspace_profile=workspace_profile,
+        project_profile=None,
+    )
+    results.append({"step": "answer_task", "status": "succeeded", "stage": task_answer.get("stage")})
+
+    state = taskflow.load_task_state(task_id, taskflow.root_for_task(workspace_root, None, None), registry)
+    state["clarification"]["skipped"] = True
+    recommendation = taskflow.maybe_recommend(state, registry, workspace_profile, None)
+    state_file, summary_file = taskflow.save_task_state(state, registry)
+    recommendation["state_path"] = str(state_file)
+    recommendation["summary_path"] = str(summary_file)
+    results.append({"step": "skip_clarification", "status": "succeeded", "stage": recommendation.get("stage")})
+
+    confirmed = taskflow.confirm_task(
+        registry,
+        root=taskflow.root_for_task(workspace_root, None, None),
+        task_id=task_id,
+        accept=True,
+        change_text=None,
+        workspace_profile=workspace_profile,
+        project_profile=None,
+    )
+    results.append({"step": "confirm_task", "status": "succeeded", "stage": confirmed.get("stage")})
+
+    checkpoint = taskflow.checkpoint_task(
+        registry,
+        root=taskflow.root_for_task(workspace_root, None, None),
+        task_id=task_id,
+        outcome=None,
+        notes=f"{host_name} smoke checkpoint after confirmation.",
+    )
+    results.append({"step": "checkpoint_task", "status": "succeeded", "recommended_action": checkpoint.get("recommended_action")})
+
+    reflection = taskflow.reflect_task(
+        registry,
+        root=taskflow.root_for_task(workspace_root, None, None),
+        task_id=task_id,
+        split_worth_it="no",
+        tool_fit="good",
+        simpler_better="no",
+        notes=None,
+        apply=True,
+    )
+    results.append({"step": "reflect_task", "status": "succeeded"})
+
+    return {
+        "workspace_root": str(workspace_root),
+        "task_id": task_id,
+        "results": results,
+        "reflection": reflection,
+    }
+
+
 def command_init_workspace(args: argparse.Namespace) -> int:
     registry = load_registry()
     registry_issues = validate_registry(registry)
@@ -1950,6 +2217,51 @@ def command_bootstrap_host(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_setup(args: argparse.Namespace) -> int:
+    hosts = setup_hosts(args.host, current_host=args.current_host)
+    before_hosts = [host_onboarding_status(host_name) for host_name in hosts]
+    payload: dict[str, object] = {
+        "product": PRODUCT_NAME,
+        "server": mcp_server_spec(),
+        "host_status_before": {
+            "hosts": before_hosts,
+            "actions": build_onboarding_actions(before_hosts),
+        },
+        "bootstrap": {
+            "dry_run": bool(args.dry_run),
+            "results": [
+                bootstrap_host(
+                    host_name,
+                    install_skills=not args.skip_skills,
+                    configure_mcp=not args.skip_mcp,
+                    force=args.force,
+                    dry_run=bool(args.dry_run),
+                )
+                for host_name in hosts
+            ],
+        },
+        "restart_hints": {host_name: host_restart_hint(host_name) for host_name in hosts},
+        "next_prompts": {
+            host_name: first_use_prompt(
+                host_name,
+                Path(args.workspace_root).resolve() if args.workspace_root else smoke_workspace_root(host_name),
+            )
+            for host_name in hosts
+        },
+    }
+    if not args.dry_run and not args.skip_smoke:
+        payload["smoke"] = {
+            host_name: run_smoke_flow(
+                Path(args.workspace_root).resolve() if args.workspace_root else smoke_workspace_root(host_name),
+                host_name=host_name,
+                force_workspace_init=bool(args.force),
+            )
+            for host_name in hosts
+        }
+    print(json.dumps(payload, indent=2))
+    return 0
+
+
 def command_uninstall_host(args: argparse.Namespace) -> int:
     hosts = onboarding_hosts(args.host, current_host=args.current_host)
     payload = {
@@ -2034,84 +2346,46 @@ def command_install_self(args: argparse.Namespace) -> int:
     return 0
 
 
-def command_doctor(args: argparse.Namespace) -> int:
-    registry = load_registry()
-    registry_issues = validate_registry(registry)
-
-    workspace_root = Path(args.workspace_root).resolve() if args.workspace_root else Path.cwd().resolve()
-    workspace_candidate = (
-        Path(args.workspace_profile).resolve()
-        if args.workspace_profile
-        else workspace_profile_path(workspace_root, registry)
-    )
-    workspace_path, workspace_profile = load_optional_profile(workspace_candidate, PROFILE_KIND_WORKSPACE)
-    workspace_issues = (
-        ["workspace profile is missing; run `relaykit.py init-workspace --workspace-root .`"]
-        if workspace_profile is None
-        else validate_profile(
-            workspace_profile,
-            registry,
-            expected_kind=PROFILE_KIND_WORKSPACE,
-            base_preset=registry_defaults(registry)["default_preset"],
-            origin="workspace profile",
-        )
-    )
-
-    project_payload = status_payload(None, [], optional=True)
-    if args.project_root or args.project_profile:
-        project_root = Path(args.project_root).resolve() if args.project_root else Path.cwd().resolve()
-        project_candidate = (
-            Path(args.project_profile).resolve()
-            if args.project_profile
-            else project_profile_path(project_root, registry)
-        )
-        project_path, project_profile = load_optional_profile(project_candidate, PROFILE_KIND_PROJECT)
-        project_issues = (
-            []
-            if project_profile is None
-            else validate_profile(
-                project_profile,
-                registry,
-                expected_kind=PROFILE_KIND_PROJECT,
-                base_preset=project_base_preset(
-                    registry,
-                    workspace_profile=workspace_profile,
-                    project_profile=project_profile,
-                ),
-                origin="project profile",
-            )
-        )
-        project_payload = status_payload(project_path, project_issues, optional=True)
-    next_actions: list[str] = []
-    if workspace_profile is None:
-        next_actions.append(
-            f"relaykit init-workspace --workspace-root {workspace_root}"
-        )
-    if args.project_root and project_payload["status"] == "missing":
-        next_actions.append(
-            f"relaykit init-project --project-root {Path(args.project_root).resolve()} --use-workspace-defaults"
-        )
-
+def command_smoke(args: argparse.Namespace) -> int:
+    hosts = setup_hosts(args.host, current_host=args.current_host)
     payload = {
-        "product": "RelayKit",
-        "registry": {
-            "status": "ok" if not registry_issues else "invalid",
-            "path": str(REGISTRY_PATH),
-            "issues": registry_issues,
+        "product": PRODUCT_NAME,
+        "smoke": {
+            host_name: run_smoke_flow(
+                Path(args.workspace_root).resolve() if args.workspace_root else smoke_workspace_root(host_name),
+                host_name=host_name,
+                force_workspace_init=bool(args.force),
+            )
+            for host_name in hosts
         },
-        "workspace_profile": status_payload(workspace_path, workspace_issues, optional=False),
-        "project_profile": project_payload,
-        "schemas": {
-            "workspace_profile": str((SCHEMA_ROOT / "workspace-profile.schema.json").resolve()),
-            "project_profile": str((SCHEMA_ROOT / "project-profile.schema.json").resolve()),
+        "next_prompts": {
+            host_name: first_use_prompt(
+                host_name,
+                Path(args.workspace_root).resolve() if args.workspace_root else smoke_workspace_root(host_name),
+            )
+            for host_name in hosts
         },
-        "persona_layer": persona_layer_summary(registry),
-        "next_actions": next_actions,
     }
-    if args.host or args.current_host:
-        attach_host_onboarding(payload, requested_hosts=args.host, current_host=args.current_host, auto_detect=False)
     print(json.dumps(payload, indent=2))
-    has_blockers = bool(registry_issues or workspace_issues or project_payload["status"] == "invalid")
+    return 0
+
+
+def command_doctor(args: argparse.Namespace) -> int:
+    workspace_root = Path(args.workspace_root).resolve() if args.workspace_root else Path.cwd().resolve()
+    payload = build_doctor_payload(
+        workspace_root=workspace_root,
+        project_root=Path(args.project_root).resolve() if args.project_root else None,
+        workspace_profile_override=Path(args.workspace_profile) if args.workspace_profile else None,
+        project_profile_override=Path(args.project_profile) if args.project_profile else None,
+        requested_hosts=args.host,
+        current_host=args.current_host,
+    )
+    print(json.dumps(payload, indent=2))
+    has_blockers = bool(
+        payload["registry"]["issues"]
+        or payload["workspace_profile"]["status"] == "invalid"
+        or payload["project_profile"]["status"] == "invalid"
+    )
     return 1 if has_blockers else 0
 
 
@@ -2639,6 +2913,32 @@ def build_parser() -> argparse.ArgumentParser:
     parser_bootstrap_host.add_argument("--force", action="store_true")
     parser_bootstrap_host.set_defaults(func=command_bootstrap_host)
 
+    parser_setup = subparsers.add_parser(
+        "setup",
+        help="One-command first-use setup: wire the host, run a safe CLI smoke test, and print the next harness prompt.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "Bootstrap one host for first use, optionally run a local RelayKit smoke flow, "
+            "and print the exact next MCP prompt to paste into the harness."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  relaykit setup --host codex --force\n"
+            "  relaykit setup --current-host\n"
+            "  relaykit setup --host claude-code --dry-run\n"
+            "  relaykit setup --host gemini-cli --skip-smoke"
+        ),
+    )
+    parser_setup.add_argument("--host", action="append")
+    parser_setup.add_argument("--current-host", action="store_true")
+    parser_setup.add_argument("--workspace-root")
+    parser_setup.add_argument("--skip-skills", action="store_true")
+    parser_setup.add_argument("--skip-mcp", action="store_true")
+    parser_setup.add_argument("--skip-smoke", action="store_true")
+    parser_setup.add_argument("--dry-run", action="store_true")
+    parser_setup.add_argument("--force", action="store_true")
+    parser_setup.set_defaults(func=command_setup)
+
     parser_uninstall_host = subparsers.add_parser(
         "uninstall-host",
         help="Remove RelayKit skills and supported host wiring for one or more harnesses.",
@@ -2682,6 +2982,27 @@ def build_parser() -> argparse.ArgumentParser:
     parser_install_self.add_argument("--skip-mcp", action="store_true")
     parser_install_self.add_argument("--force", action="store_true")
     parser_install_self.set_defaults(func=command_install_self)
+
+    parser_smoke = subparsers.add_parser(
+        "smoke",
+        help="Run a reusable RelayKit lifecycle smoke test and print the next harness prompt.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "Run the standard RelayKit lifecycle smoke test in a scratch workspace. "
+            "This proves the local runtime before or after a host is wired."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  relaykit smoke --host codex\n"
+            "  relaykit smoke --host antigravity --workspace-root /private/tmp/relaykit-antigravity-smoke\n"
+            "  relaykit smoke --current-host"
+        ),
+    )
+    parser_smoke.add_argument("--host", action="append")
+    parser_smoke.add_argument("--current-host", action="store_true")
+    parser_smoke.add_argument("--workspace-root")
+    parser_smoke.add_argument("--force", action="store_true")
+    parser_smoke.set_defaults(func=command_smoke)
 
     parser_doctor = subparsers.add_parser(
         "doctor",
