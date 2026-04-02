@@ -12,6 +12,7 @@ Skills are portable prompt assets that define how a role should behave. They shi
 | `relaykit-orchestrator` | orchestrator | Lane planning, sequencing, checkpointing, convergence |
 | `relaykit-contributor` | builder | Implementation, repo editing, verification |
 | `relaykit-critic` | critic | Advisory challenge without ownership transfer |
+| `relaykit-converger` | converger | Compare competing outputs and drive a final convergence decision |
 | `relaykit-reviewer` | reviewer | Gate review with explicit pass/fail authority |
 | `relaykit-researcher` | researcher | Evidence gathering and synthesis before execution |
 | `relaykit-tester` | tester | Verification against acceptance criteria, concrete pass/fail |

@@ -29,13 +29,12 @@ CHANGE_REASONS = {"stage_change", "setup_underperformed", "new_information", "sc
 REFLECTION_VALUES = {"yes", "no", "mixed", "unknown"}
 TOOL_FIT_VALUES = {"good", "bad", "mixed", "unknown"}
 TOOL_COST = {
-    "claude-opus-4": "high",
-    "claude-sonnet-4": "medium",
-    "claude-haiku-4": "low",
-    "gpt-4.1": "high",
-    "gpt-4.1-mini": "low",
-    "gemini-2.5-pro": "medium",
-    "gemini-2.5-flash": "low",
+    "gpt-5.4": "high",
+    "gpt-5.4-mini": "low",
+    "opus-4.6": "high",
+    "sonnet-4.6": "medium",
+    "gemini-3.1-pro": "medium",
+    "gemini-3.1-flash": "low",
 }
 ROLE_TO_SKILL = {
     "orchestrator": "orchestrator",
@@ -45,7 +44,7 @@ ROLE_TO_SKILL = {
     "reviewer": "reviewer",
     "tester": "tester",
     "researcher": "researcher",
-    "converger": "orchestrator",
+    "converger": "converger",
 }
 FRONTEND_KEYWORDS = {
     "frontend",

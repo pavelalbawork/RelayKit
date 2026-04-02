@@ -79,6 +79,8 @@ def load_registry() -> dict:
 
 
 def resolve_relative(path: str) -> str:
+    if not path:
+        raise ValueError("registry-relative path must not be empty")
     return str((REPO_ROOT / path).resolve())
 
 
@@ -1235,6 +1237,9 @@ def validate_registry(registry: dict) -> list[str]:
         )
 
     for skill_name, meta in registry["skills"].items():
+        if not isinstance(meta.get("path"), str) or not meta["path"].strip():
+            issues.append(f"skill `{skill_name}` must declare a non-empty `path`")
+            continue
         if not Path(resolve_relative(meta["path"])).exists():
             issues.append(f"skill `{skill_name}` path is missing: {meta['path']}")
         if not meta.get("default_role"):
@@ -1243,6 +1248,9 @@ def validate_registry(registry: dict) -> list[str]:
             issues.append(f"skill `{skill_name}` has invalid `default_capabilities`")
 
     for host_name, meta in registry["hosts"].items():
+        if not isinstance(meta.get("path"), str) or not meta["path"].strip():
+            issues.append(f"host `{host_name}` must declare a non-empty `path`")
+            continue
         if not Path(resolve_relative(meta["path"])).exists():
             issues.append(f"host `{host_name}` path is missing: {meta['path']}")
         if not isinstance(meta.get("supports_reasoning_effort"), bool):
@@ -1251,6 +1259,9 @@ def validate_registry(registry: dict) -> list[str]:
             issues.append(f"host `{host_name}` has invalid `default_models`")
 
     for model_name, meta in registry["models"].items():
+        if not isinstance(meta.get("path"), str) or not meta["path"].strip():
+            issues.append(f"model `{model_name}` must declare a non-empty `path`")
+            continue
         if not Path(resolve_relative(meta["path"])).exists():
             issues.append(f"model `{model_name}` path is missing: {meta['path']}")
         if not isinstance(meta.get("hosts"), list) or not meta["hosts"]:
@@ -1277,7 +1288,9 @@ def validate_registry(registry: dict) -> list[str]:
         ]:
             if key not in meta:
                 issues.append(f"persona `{persona_name}` missing `{key}`")
-        if not Path(resolve_relative(meta["path"])).exists():
+        if not isinstance(meta.get("path"), str) or not meta["path"].strip():
+            issues.append(f"persona `{persona_name}` must declare a non-empty `path`")
+        elif not Path(resolve_relative(meta["path"])).exists():
             issues.append(f"persona `{persona_name}` path is missing: {meta['path']}")
         if not isinstance(meta.get("compatible_roles"), list):
             issues.append(f"persona `{persona_name}` has invalid `compatible_roles`")
@@ -2217,8 +2230,16 @@ def command_bootstrap_host(args: argparse.Namespace) -> int:
     return 0
 
 
-def command_setup(args: argparse.Namespace) -> int:
-    hosts = setup_hosts(args.host, current_host=args.current_host)
+def build_setup_payload(
+    *,
+    hosts: list[str],
+    workspace_root: Path | None,
+    skip_skills: bool,
+    skip_mcp: bool,
+    skip_smoke: bool,
+    force: bool,
+    dry_run: bool,
+) -> dict[str, object]:
     before_hosts = [host_onboarding_status(host_name) for host_name in hosts]
     payload: dict[str, object] = {
         "product": PRODUCT_NAME,
@@ -2228,14 +2249,14 @@ def command_setup(args: argparse.Namespace) -> int:
             "actions": build_onboarding_actions(before_hosts),
         },
         "bootstrap": {
-            "dry_run": bool(args.dry_run),
+            "dry_run": dry_run,
             "results": [
                 bootstrap_host(
                     host_name,
-                    install_skills=not args.skip_skills,
-                    configure_mcp=not args.skip_mcp,
-                    force=args.force,
-                    dry_run=bool(args.dry_run),
+                    install_skills=not skip_skills,
+                    configure_mcp=not skip_mcp,
+                    force=force,
+                    dry_run=dry_run,
                 )
                 for host_name in hosts
             ],
@@ -2244,20 +2265,34 @@ def command_setup(args: argparse.Namespace) -> int:
         "next_prompts": {
             host_name: first_use_prompt(
                 host_name,
-                Path(args.workspace_root).resolve() if args.workspace_root else smoke_workspace_root(host_name),
+                workspace_root if workspace_root else smoke_workspace_root(host_name),
             )
             for host_name in hosts
         },
     }
-    if not args.dry_run and not args.skip_smoke:
+    if not dry_run and not skip_smoke:
         payload["smoke"] = {
             host_name: run_smoke_flow(
-                Path(args.workspace_root).resolve() if args.workspace_root else smoke_workspace_root(host_name),
+                workspace_root if workspace_root else smoke_workspace_root(host_name),
                 host_name=host_name,
-                force_workspace_init=bool(args.force),
+                force_workspace_init=force,
             )
             for host_name in hosts
         }
+    return payload
+
+
+def command_setup(args: argparse.Namespace) -> int:
+    hosts = setup_hosts(args.host, current_host=args.current_host)
+    payload = build_setup_payload(
+        hosts=hosts,
+        workspace_root=Path(args.workspace_root).resolve() if args.workspace_root else None,
+        skip_skills=bool(args.skip_skills),
+        skip_mcp=bool(args.skip_mcp),
+        skip_smoke=bool(args.skip_smoke),
+        force=bool(args.force),
+        dry_run=bool(args.dry_run),
+    )
     print(json.dumps(payload, indent=2))
     return 0
 
@@ -2293,7 +2328,27 @@ def command_acknowledge_host(args: argparse.Namespace) -> int:
 
 
 def command_install_self(args: argparse.Namespace) -> int:
-    venv_dir = Path(args.venv).expanduser().resolve()
+    payload = build_install_self_payload(
+        venv_dir=Path(args.venv).expanduser().resolve(),
+        requested_hosts=args.host,
+        current_host=bool(args.current_host),
+        skip_skills=bool(args.skip_skills),
+        skip_mcp=bool(args.skip_mcp),
+        force=bool(args.force),
+    )
+    print(json.dumps(payload, indent=2))
+    return 0
+
+
+def build_install_self_payload(
+    *,
+    venv_dir: Path,
+    requested_hosts: list[str] | None,
+    current_host: bool,
+    skip_skills: bool,
+    skip_mcp: bool,
+    force: bool,
+) -> dict[str, object]:
     created = False
     if not venv_dir.exists():
         import venv
@@ -2330,42 +2385,54 @@ def command_install_self(args: argparse.Namespace) -> int:
             f"{venv_dir}/bin/relaykit --version",
         ],
     }
-    if args.host or args.current_host:
-        hosts = onboarding_hosts(args.host, current_host=args.current_host)
+    if requested_hosts or current_host:
+        hosts = onboarding_hosts(requested_hosts, current_host=current_host)
         payload["host_install"] = [
             bootstrap_host(
                 host_name,
-                install_skills=not args.skip_skills,
-                configure_mcp=not args.skip_mcp,
-                force=args.force,
+                install_skills=not skip_skills,
+                configure_mcp=not skip_mcp,
+                force=force,
                 dry_run=False,
             )
             for host_name in hosts
         ]
-    print(json.dumps(payload, indent=2))
-    return 0
+    return payload
 
 
-def command_smoke(args: argparse.Namespace) -> int:
-    hosts = setup_hosts(args.host, current_host=args.current_host)
-    payload = {
+def build_smoke_payload(
+    *,
+    hosts: list[str],
+    workspace_root: Path | None,
+    force: bool,
+) -> dict[str, object]:
+    return {
         "product": PRODUCT_NAME,
         "smoke": {
             host_name: run_smoke_flow(
-                Path(args.workspace_root).resolve() if args.workspace_root else smoke_workspace_root(host_name),
+                workspace_root if workspace_root else smoke_workspace_root(host_name),
                 host_name=host_name,
-                force_workspace_init=bool(args.force),
+                force_workspace_init=force,
             )
             for host_name in hosts
         },
         "next_prompts": {
             host_name: first_use_prompt(
                 host_name,
-                Path(args.workspace_root).resolve() if args.workspace_root else smoke_workspace_root(host_name),
+                workspace_root if workspace_root else smoke_workspace_root(host_name),
             )
             for host_name in hosts
         },
     }
+
+
+def command_smoke(args: argparse.Namespace) -> int:
+    hosts = setup_hosts(args.host, current_host=args.current_host)
+    payload = build_smoke_payload(
+        hosts=hosts,
+        workspace_root=Path(args.workspace_root).resolve() if args.workspace_root else None,
+        force=bool(args.force),
+    )
     print(json.dumps(payload, indent=2))
     return 0
 

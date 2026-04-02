@@ -46,47 +46,9 @@ relaykit --version
 relaykit-mcp --help
 ```
 
-## Setup: Add Your Hosts to the Registry
+## Registry Setup
 
-Before testing from Codex or Gemini, update `config/registry.json` to include your actual hosts and models.
-
-### For Codex testing, add to `hosts`:
-
-```json
-"codex": {
-  "path": "",
-  "supports_reasoning_effort": true,
-  "default_models": ["gpt-4.1"]
-}
-```
-
-And to `models`:
-
-```json
-"gpt-4.1": {
-  "path": "",
-  "hosts": ["codex"]
-}
-```
-
-### For Gemini CLI testing, add to `hosts`:
-
-```json
-"gemini-cli": {
-  "path": "",
-  "supports_reasoning_effort": false,
-  "default_models": ["gemini-2.5-pro"]
-}
-```
-
-And to `models`:
-
-```json
-"gemini-2.5-pro": {
-  "path": "",
-  "hosts": ["gemini-cli"]
-}
-```
+The shipped registry already includes Codex, Claude Code, Gemini CLI, and Antigravity with the supported model notes and host guides. You should not need to hand-edit `config/registry.json` before normal testing.
 
 ## Setup: Create a Test Workspace
 
@@ -221,7 +183,6 @@ gemini mcp list
 mkdir -p /tmp/relaykit-gemini-test
 cd /tmp/relaykit-gemini-test
 relaykit init-workspace --workspace-root .
-# List gemini-cli as an available host, gemini-2.5-pro as a model
 relaykit doctor --workspace-root .
 ```
 

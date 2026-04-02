@@ -8,8 +8,10 @@
   "archetype": "backend",
   "flags": {
     "frontend": false,
-    "review_only": false,
-    "research_heavy": false,
+    "review": false,
+    "research": false,
+    "implementation": true,
+    "bugfix": false,
     "cross_project": false,
     "pause_sensitive": false
   },

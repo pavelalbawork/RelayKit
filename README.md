@@ -80,6 +80,8 @@ relaykit uninstall-host --current-host     # remove RelayKit-managed wiring
 relaykit doctor --current-host             # validate the full setup
 ```
 
+Use `setup` for normal first use. Use `host-status` when a harness wants to inspect readiness before prompting, and use `bootstrap-host` only when you want the wiring step without the bundled smoke run.
+
 Fastest full local bring-up when you also want onboarding:
 
 ```bash

@@ -22,10 +22,12 @@
 | `init-project` | Create a project profile inheriting workspace defaults |
 | `init-persona` | Scaffold a new persona file |
 | `host-status` | Check whether a harness is ready and get onboarding actions |
+| `setup` | First-use path: wire a harness, run a local smoke test, and print the next host prompt |
 | `bootstrap-host` | Install RelayKit skills and supported harness wiring |
 | `uninstall-host` | Remove RelayKit-managed harness wiring |
 | `acknowledge-host` | Record that onboarding was offered and deferred |
 | `install-self` | Create a venv, install RelayKit, and optionally wire harnesses |
+| `smoke` | Run the reusable local lifecycle smoke flow without changing harness wiring |
 | `doctor` | Validate registry, profiles, schemas, and optional host readiness |
 
 ## Inspection
@@ -67,6 +69,6 @@ relaykit reflect-task --workspace-root . --task-id <id> --split-worth-it yes --t
 
 ## MCP Tools
 
-The MCP server exposes the same commands as tools prefixed with `relaykit_`:
+The MCP server exposes the operational RelayKit commands as tools prefixed with `relaykit_`:
 
-`relaykit_start_task`, `relaykit_answer_task`, `relaykit_confirm_task`, `relaykit_show_task`, `relaykit_checkpoint_task`, `relaykit_advance_task`, `relaykit_resume_task`, `relaykit_render_task_part`, `relaykit_reflect_task`, `relaykit_host_status`, `relaykit_bootstrap_host`, `relaykit_uninstall_host`, `relaykit_acknowledge_host`, `relaykit_doctor`, `relaykit_list`, `relaykit_preset`, `relaykit_stack`, `relaykit_render_prompt_stack`, `relaykit_init_workspace`, `relaykit_init_project`, `relaykit_init_persona`.
+`relaykit_start_task`, `relaykit_answer_task`, `relaykit_confirm_task`, `relaykit_show_task`, `relaykit_checkpoint_task`, `relaykit_advance_task`, `relaykit_resume_task`, `relaykit_render_task_part`, `relaykit_reflect_task`, `relaykit_host_status`, `relaykit_setup`, `relaykit_bootstrap_host`, `relaykit_uninstall_host`, `relaykit_acknowledge_host`, `relaykit_install_self`, `relaykit_smoke`, `relaykit_doctor`, `relaykit_list`, `relaykit_preset`, `relaykit_stack`, `relaykit_render_prompt_stack`, `relaykit_init_workspace`, `relaykit_init_project`, `relaykit_init_persona`.

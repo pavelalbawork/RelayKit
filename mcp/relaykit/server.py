@@ -243,6 +243,21 @@ def tool_bootstrap_host(arguments: dict[str, Any]) -> dict[str, Any]:
     return make_text_result(json_text(payload), structured=payload)
 
 
+def tool_setup(arguments: dict[str, Any]) -> dict[str, Any]:
+    hosts = relaykit.setup_hosts(arguments.get("host"), current_host=bool(arguments.get("current_host")))
+    workspace_root = Path(arguments["workspace_root"]).resolve() if arguments.get("workspace_root") else None
+    payload = relaykit.build_setup_payload(
+        hosts=hosts,
+        workspace_root=workspace_root,
+        skip_skills=bool(arguments.get("skip_skills")),
+        skip_mcp=bool(arguments.get("skip_mcp")),
+        skip_smoke=bool(arguments.get("skip_smoke")),
+        force=bool(arguments.get("force")),
+        dry_run=bool(arguments.get("dry_run")),
+    )
+    return make_text_result(json_text(payload), structured=payload)
+
+
 def tool_uninstall_host(arguments: dict[str, Any]) -> dict[str, Any]:
     hosts = relaykit.onboarding_hosts(arguments.get("host"), current_host=bool(arguments.get("current_host")))
     payload = {
@@ -258,6 +273,29 @@ def tool_uninstall_host(arguments: dict[str, Any]) -> dict[str, Any]:
             for host_name in hosts
         ],
     }
+    return make_text_result(json_text(payload), structured=payload)
+
+
+def tool_install_self(arguments: dict[str, Any]) -> dict[str, Any]:
+    payload = relaykit.build_install_self_payload(
+        venv_dir=Path(arguments.get("venv", ".venv")).expanduser().resolve(),
+        requested_hosts=arguments.get("host"),
+        current_host=bool(arguments.get("current_host")),
+        skip_skills=bool(arguments.get("skip_skills")),
+        skip_mcp=bool(arguments.get("skip_mcp")),
+        force=bool(arguments.get("force")),
+    )
+    return make_text_result(json_text(payload), structured=payload)
+
+
+def tool_smoke(arguments: dict[str, Any]) -> dict[str, Any]:
+    hosts = relaykit.setup_hosts(arguments.get("host"), current_host=bool(arguments.get("current_host")))
+    workspace_root = Path(arguments["workspace_root"]).resolve() if arguments.get("workspace_root") else None
+    payload = relaykit.build_smoke_payload(
+        hosts=hosts,
+        workspace_root=workspace_root,
+        force=bool(arguments.get("force")),
+    )
     return make_text_result(json_text(payload), structured=payload)
 
 
@@ -723,6 +761,24 @@ TOOLS: dict[str, dict[str, Any]] = {
         },
         "handler": tool_bootstrap_host,
     },
+    "relaykit_setup": {
+        "description": "Run the first-use RelayKit setup flow: wire the harness, optionally run the local smoke test, and return the exact next prompt to paste into the host.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "host": {"type": "array", "items": {"type": "string"}},
+                "current_host": {"type": "boolean"},
+                "workspace_root": {"type": "string"},
+                "skip_skills": {"type": "boolean"},
+                "skip_mcp": {"type": "boolean"},
+                "skip_smoke": {"type": "boolean"},
+                "dry_run": {"type": "boolean"},
+                "force": {"type": "boolean"}
+            },
+            "additionalProperties": False,
+        },
+        "handler": tool_setup,
+    },
     "relaykit_uninstall_host": {
         "description": "Remove RelayKit skills and auto-configurable wiring for one or more supported harnesses.",
         "inputSchema": {
@@ -749,6 +805,36 @@ TOOLS: dict[str, dict[str, Any]] = {
             "additionalProperties": False,
         },
         "handler": tool_acknowledge_host,
+    },
+    "relaykit_install_self": {
+        "description": "Create a local venv, install RelayKit into it, and optionally wire supported harnesses.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "venv": {"type": "string"},
+                "host": {"type": "array", "items": {"type": "string"}},
+                "current_host": {"type": "boolean"},
+                "skip_skills": {"type": "boolean"},
+                "skip_mcp": {"type": "boolean"},
+                "force": {"type": "boolean"}
+            },
+            "additionalProperties": False,
+        },
+        "handler": tool_install_self,
+    },
+    "relaykit_smoke": {
+        "description": "Run the reusable RelayKit lifecycle smoke flow and return the next host prompt without shelling out to the CLI.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "host": {"type": "array", "items": {"type": "string"}},
+                "current_host": {"type": "boolean"},
+                "workspace_root": {"type": "string"},
+                "force": {"type": "boolean"}
+            },
+            "additionalProperties": False,
+        },
+        "handler": tool_smoke,
     },
     "relaykit_list": {
         "description": "List registered skills, hosts, models, presets, personas, or preset lanes.",
@@ -838,6 +924,7 @@ TOOLS: dict[str, dict[str, Any]] = {
             "type": "object",
             "properties": {
                 "workspace_root": {"type": "string"},
+                "start_with_defaults": {"type": "boolean"},
                 "force": {"type": "boolean"},
                 "preset": {"type": "string"},
                 "default_personas": {"type": "array", "items": {"type": "string"}},

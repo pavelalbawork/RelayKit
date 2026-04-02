@@ -90,7 +90,7 @@ relaykit answer-task \
         "personas": ["pragmatic-builder"],
         "objective": "Add a rate limiter to the login function in src/auth.py that blocks after 5 failed attempts per email within a 15-minute window. Update tests in src/test_auth.py.",
         "allowed_scope": ["src/auth.py", "src/test_auth.py"],
-        "verification_target": "python3 -m pytest src/ -v passes with no failures"
+        "verification_target": "python3 -m unittest discover -s src -p 'test_*.py' -v passes with no failures"
       }
     ]
   }
