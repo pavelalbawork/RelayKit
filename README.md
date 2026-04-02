@@ -20,13 +20,13 @@ relaykit-mcp --help
 
 The installed `relaykit-mcp` entry point is the preferred MCP launch path across Codex, Claude Code, Gemini CLI, and Antigravity. It avoids raw source-tree config and keeps host wiring consistent.
 
-**Skills only — zero dependencies (Claude Code):**
+**Skills only — zero dependencies (optional fallback):**
 
 ```bash
 cp -r skills/ ~/.claude/skills/
 ```
 
-Copies the skill surface directly. No Python required. Use this if you only need RelayKit skills in Claude Code and don't need the CLI or MCP server.
+Copies the skill surface directly. No Python required. Use this only if you want portable RelayKit skills without the CLI or MCP server. For Codex, Claude Code, Gemini CLI, and Antigravity, the normal `pipx` install plus `bootstrap-host` path is the preferred setup.
 
 **Fastest fallback on Homebrew Python — one command, venv-safe:**
 
@@ -55,6 +55,8 @@ After install, run one command to wire your harnesses. RelayKit detects what's m
 ```bash
 relaykit bootstrap-host --current-host
 ```
+
+Supported auto-wiring targets currently include Codex, Claude Code, Gemini CLI, and Antigravity.
 
 To preview changes without applying them:
 

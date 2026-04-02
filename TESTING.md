@@ -4,7 +4,7 @@
 
 - Python 3.11+
 - Git
-- Access to at least one of: Codex CLI, Gemini CLI
+- Access to at least one of: Codex, Claude Code, Gemini CLI, Antigravity
 
 ## Installation
 
@@ -195,15 +195,16 @@ Open Codex and run these MCP tool calls (or ask Codex to run them):
 
 ---
 
-## Test Case 2: Gemini CLI via Skills
+## Test Case 2: Gemini CLI via MCP + Skills
 
-**Goal:** Verify the skill-first flow works from Gemini CLI using file-based skills.
+**Goal:** Verify the full host-wired flow works from Gemini CLI with RelayKit-managed MCP wiring and skills.
 
-### Step 1: Install skills for Gemini CLI
+### Step 1: Bootstrap Gemini CLI
 
 ```bash
-mkdir -p ~/.gemini/skills
-cp -r /Users/palba/Projects/Orchestration/RelayKit/skills/* ~/.gemini/skills/
+relaykit bootstrap-host --host gemini-cli --dry-run
+relaykit bootstrap-host --host gemini-cli --force
+gemini mcp list
 ```
 
 ### Step 2: Create a test workspace
@@ -218,11 +219,11 @@ relaykit doctor --workspace-root .
 
 ### Step 3: Run the test from Gemini CLI
 
-Open Gemini CLI in `/tmp/relaykit-gemini-test` and ask it to use the RelayKit skill:
+Open Gemini CLI in `/tmp/relaykit-gemini-test` and use either the RelayKit MCP tools directly or the RelayKit skill:
 
 ```
-Prompt 1: "Use the relaykit skill to start a task: Refactor the database queries to use connection pooling"
-Expected: Gemini reads the skill, runs relaykit start-task, returns first question
+Prompt 1: "Call relaykit_start_task for: Refactor the database queries to use connection pooling"
+Expected: Gemini uses the MCP tool, returns first question
 
 Prompt 2: "Answer: Only refactor queries in db.py, don't change the schema"
 Expected: Runs answer-task, returns next question
@@ -243,7 +244,7 @@ Expected: Runs reflect-task, records learning
 ### Pass criteria
 
 - All 6 prompts complete without errors
-- Gemini CLI correctly reads and follows the skill file
+- Gemini CLI exposes the RelayKit MCP tools after bootstrap
 - Task state persists in `/tmp/relaykit-gemini-test/.relaykit/tasks/`
 - Learning log gets an entry
 

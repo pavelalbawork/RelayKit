@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import subprocess
 import sys
 
 
@@ -46,6 +47,8 @@ HOST_SKILL_HOMES = {
 }
 HOST_MCP_TARGETS = {
     "codex": {"kind": "toml", "path": Path("~/.codex/config.toml")},
+    "claude-code": {"kind": "claude-cli", "path": Path("~/.claude/settings.json")},
+    "gemini-cli": {"kind": "json", "path": Path("~/.gemini/settings.json")},
     "antigravity": {"kind": "json", "path": Path("~/.gemini/antigravity/mcp_config.json")},
 }
 PRODUCT_NAME = "RelayKit"
@@ -226,6 +229,32 @@ def write_codex_mcp_config(path: Path) -> dict[str, object]:
     return {"path": str(path.resolve()), "configured": True}
 
 
+def write_claude_mcp_config(path: Path) -> dict[str, object]:
+    server = mcp_server_spec()
+    subprocess.run(
+        ["claude", "mcp", "remove", "--scope", "user", MCP_SERVER_NAME],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    command = ["claude", "mcp", "add", "--scope", "user", MCP_SERVER_NAME, "--", str(server["command"])]
+    command.extend(str(arg) for arg in (server.get("args") or []))
+    result = subprocess.run(
+        command,
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if result.returncode != 0:
+        fail(
+            "failed to configure Claude Code MCP",
+            details=[result.stderr.strip() or result.stdout.strip() or "unknown claude mcp add failure"],
+        )
+    return {"path": str(path.resolve()), "configured": True}
+
+
 def remove_codex_mcp_config(path: Path) -> dict[str, object]:
     existing = path.read_text(encoding="utf-8") if path.exists() else ""
     updated = strip_toml_table(existing, f"mcp_servers.{MCP_SERVER_NAME}").rstrip()
@@ -234,6 +263,22 @@ def remove_codex_mcp_config(path: Path) -> dict[str, object]:
         path.write_text(updated + "\n", encoding="utf-8")
     else:
         path.write_text("", encoding="utf-8")
+    return {"path": str(path.resolve()), "configured": False}
+
+
+def remove_claude_mcp_config(path: Path) -> dict[str, object]:
+    result = subprocess.run(
+        ["claude", "mcp", "remove", "--scope", "user", MCP_SERVER_NAME],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if result.returncode not in {0, 1}:
+        fail(
+            "failed to remove Claude Code MCP",
+            details=[result.stderr.strip() or result.stdout.strip() or "unknown claude mcp remove failure"],
+        )
     return {"path": str(path.resolve()), "configured": False}
 
 
@@ -312,6 +357,15 @@ def host_onboarding_status(host_name: str) -> dict[str, object]:
         configured = f"[mcp_servers.{MCP_SERVER_NAME}]" in resolved_mcp_path.read_text(encoding="utf-8")
     if mcp_target["kind"] == "json" and resolved_mcp_path.exists():
         configured = MCP_SERVER_NAME in read_json(resolved_mcp_path).get("mcpServers", {})
+    if mcp_target["kind"] == "claude-cli":
+        result = subprocess.run(
+            ["claude", "mcp", "get", MCP_SERVER_NAME],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        configured = result.returncode == 0
     payload["mcp"] = {
         "path": str(resolved_mcp_path),
         "configured": configured,
@@ -367,6 +421,8 @@ def bootstrap_host(
                 payload["mcp"] = {"configured": False, "path": str(resolved), "preview": mcp_server_spec()}
             elif mcp_target["kind"] == "toml":
                 payload["mcp"] = write_codex_mcp_config(resolved)
+            elif mcp_target["kind"] == "claude-cli":
+                payload["mcp"] = write_claude_mcp_config(resolved)
             else:
                 payload["mcp"] = write_json_mcp_config(resolved)
     if not dry_run:
@@ -407,6 +463,8 @@ def uninstall_host(
                 payload["mcp"] = {"configured": True, "path": str(resolved), "preview_remove": MCP_SERVER_NAME}
             elif mcp_target["kind"] == "toml":
                 payload["mcp"] = remove_codex_mcp_config(resolved)
+            elif mcp_target["kind"] == "claude-cli":
+                payload["mcp"] = remove_claude_mcp_config(resolved)
             else:
                 payload["mcp"] = remove_json_mcp_config(resolved)
     if not dry_run:
