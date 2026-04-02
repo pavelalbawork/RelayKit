@@ -51,6 +51,7 @@ HOST_MCP_TARGETS = {
 PRODUCT_NAME = "RelayKit"
 MCP_SERVER_NAME = "relaykit"
 MCP_SERVER_PATH = (REPO_ROOT / "mcp" / "relaykit" / "server.py").resolve()
+MCP_SERVER_ENTRYPOINT = "relaykit-mcp"
 MCP_SERVER_COMMAND = sys.executable
 SKILLS_ROOT = REPO_ROOT / "skills"
 ONBOARDING_STATE_PATH = Path("~/.relaykit/relaykit-onboarding-state.json")
@@ -151,6 +152,20 @@ def onboarding_hosts(requested_hosts: list[str] | None, *, current_host: bool) -
 
 
 def mcp_server_spec() -> dict[str, object]:
+    entrypoint = shutil.which(MCP_SERVER_ENTRYPOINT)
+    if entrypoint:
+        return {
+            "name": MCP_SERVER_NAME,
+            "command": entrypoint,
+            "args": [],
+        }
+    pipx_entrypoint = expand_user_path(Path("~/.local/bin") / MCP_SERVER_ENTRYPOINT)
+    if pipx_entrypoint.exists():
+        return {
+            "name": MCP_SERVER_NAME,
+            "command": str(pipx_entrypoint),
+            "args": [],
+        }
     return {
         "name": MCP_SERVER_NAME,
         "command": MCP_SERVER_COMMAND,
@@ -193,15 +208,18 @@ def strip_toml_table(text: str, table_name: str) -> str:
 
 
 def write_codex_mcp_config(path: Path) -> dict[str, object]:
+    server = mcp_server_spec()
     existing = path.read_text(encoding="utf-8") if path.exists() else ""
     updated = strip_toml_table(existing, f"mcp_servers.{MCP_SERVER_NAME}").rstrip()
-    block = "\n".join(
-        [
-            f"[mcp_servers.{MCP_SERVER_NAME}]",
-            f'command = "{MCP_SERVER_COMMAND}"',
-            f'args = ["{MCP_SERVER_PATH}"]',
-        ]
-    )
+    lines = [
+        f"[mcp_servers.{MCP_SERVER_NAME}]",
+        f'command = "{server["command"]}"',
+    ]
+    args = server.get("args") or []
+    if args:
+        rendered_args = ", ".join(f'"{arg}"' for arg in args)
+        lines.append(f"args = [{rendered_args}]")
+    block = "\n".join(lines)
     final_text = (updated + "\n\n" + block + "\n").lstrip("\n")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(final_text, encoding="utf-8")
@@ -220,13 +238,14 @@ def remove_codex_mcp_config(path: Path) -> dict[str, object]:
 
 
 def write_json_mcp_config(path: Path) -> dict[str, object]:
+    server = mcp_server_spec()
     payload = read_json(path) if path.exists() else {}
     mcp_servers = payload.setdefault("mcpServers", {})
     if not isinstance(mcp_servers, dict):
         fail(f"`mcpServers` must be an object in {path}")
     mcp_servers[MCP_SERVER_NAME] = {
-        "command": MCP_SERVER_COMMAND,
-        "args": [str(MCP_SERVER_PATH)],
+        "command": server["command"],
+        **({"args": server["args"]} if server.get("args") else {}),
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
