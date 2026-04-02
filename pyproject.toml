@@ -12,7 +12,10 @@ license = {text = "MIT"}
 authors = [
   {name = "Pavel Alba"}
 ]
-dependencies = []
+dependencies = [
+  "anyio>=4.5",
+  "mcp>=1.27,<2",
+]
 
 [project.urls]
 Homepage = "https://github.com/palba/relaykit"

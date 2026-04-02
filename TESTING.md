@@ -16,6 +16,8 @@ relaykit --version
 relaykit-mcp --help
 ```
 
+This is the preferred path for Codex, Claude Code, Gemini CLI, and Antigravity because it gives every harness the same stable `relaykit-mcp` command.
+
 **Fallback — one command, venv-safe:**
 
 ```bash
@@ -97,7 +99,14 @@ relaykit doctor --workspace-root .
 
 ### Step 1: Configure the MCP server in Codex
 
-Add this to your Codex MCP config (usually `~/.codex/mcp.json` or equivalent).
+Prefer the built-in onboarding path first:
+
+```bash
+relaykit bootstrap-host --host codex --dry-run
+relaykit bootstrap-host --host codex --force
+```
+
+If you need to wire Codex manually, add this to its MCP config:
 
 If installed via `pipx`:
 
@@ -128,6 +137,8 @@ If installed via venv, use the full path instead:
 ```bash
 cp -r /Users/palba/Projects/Orchestration/RelayKit/skills/* ~/.codex/skills/ 2>/dev/null || echo "Create ~/.codex/skills/ first"
 ```
+
+`bootstrap-host --host codex --force` can do this automatically for supported hosts, so manual copying should usually be unnecessary.
 
 ### Step 3: Run the test from Codex
 

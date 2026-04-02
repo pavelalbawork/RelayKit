@@ -5,10 +5,22 @@ import argparse
 import json
 from pathlib import Path
 import sys
+import time
 from typing import Any, Callable
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+REMOVED_REPO_PATHS: list[str] = []
+for candidate in (str(REPO_ROOT),):
+    while candidate in sys.path:
+        sys.path.remove(candidate)
+        REMOVED_REPO_PATHS.append(candidate)
 
-ROOT = Path(__file__).resolve().parents[2]
+import anyio
+import mcp.types as mcp_types
+from mcp.server.lowlevel import NotificationOptions, Server
+from mcp.server.stdio import stdio_server
+
+ROOT = REPO_ROOT
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 SCRIPTS_DIR = ROOT / "scripts"
@@ -19,60 +31,26 @@ import relaykit  # type: ignore
 from relaykit_backend import taskflow
 
 
-PROTOCOL_VERSION = "2024-11-05"
 SERVER_INFO = {
     "name": "relaykit-mcp",
     "title": "RelayKit MCP Server",
     "version": relaykit.VERSION,
 }
-
-
-def write_message(payload: dict[str, Any]) -> None:
-    body = json.dumps(payload).encode("utf-8")
-    sys.stdout.buffer.write(f"Content-Length: {len(body)}\r\n\r\n".encode("ascii"))
-    sys.stdout.buffer.write(body)
-    sys.stdout.buffer.flush()
-
-
-def read_message() -> dict[str, Any] | None:
-    headers: dict[str, str] = {}
-    while True:
-        line = sys.stdin.buffer.readline()
-        if not line:
-            return None
-        if line in {b"\r\n", b"\n"}:
-            if headers:
-                break
-            continue
-        decoded = line.decode("utf-8").strip()
-        if ":" not in decoded:
-            continue
-        key, value = decoded.split(":", 1)
-        headers[key.strip().lower()] = value.strip()
-
-    content_length = headers.get("content-length")
-    if content_length is None:
-        return None
-    raw = sys.stdin.buffer.read(int(content_length))
-    return json.loads(raw.decode("utf-8"))
-
-
-def send_response(request_id: Any, result: dict[str, Any]) -> None:
-    write_message({"jsonrpc": "2.0", "id": request_id, "result": result})
-
-
-def send_error(request_id: Any, code: int, message: str, data: Any = None) -> None:
-    payload: dict[str, Any] = {
-        "jsonrpc": "2.0",
-        "id": request_id,
-        "error": {
-            "code": code,
-            "message": message,
-        },
-    }
-    if data is not None:
-        payload["error"]["data"] = data
-    write_message(payload)
+LOG_LEVELS = {"debug": 10, "info": 20, "warning": 30, "error": 40}
+LOG_LEVEL_NAME = "info"
+LOG_FILE_PATH = Path("/tmp/relaykit-mcp.log")
+def log_event(message: str, *, level: str = "info") -> None:
+    configured = LOG_LEVELS.get(LOG_LEVEL_NAME, 20)
+    current = LOG_LEVELS.get(level, 20)
+    if current < configured:
+        return
+    line = f"[{SERVER_INFO['name']}] {level}: {message}"
+    print(line, file=sys.stderr, flush=True)
+    try:
+        with LOG_FILE_PATH.open("a", encoding="utf-8") as handle:
+            handle.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {line}\n")
+    except OSError:
+        pass
 
 
 def json_text(payload: Any) -> str:
@@ -1091,85 +1069,94 @@ TOOLS: dict[str, dict[str, Any]] = {
 }
 
 
-def handle_initialize(request_id: Any, params: dict[str, Any]) -> None:
-    requested_version = params.get("protocolVersion") or PROTOCOL_VERSION
-    result = {
-        "protocolVersion": requested_version,
-        "capabilities": {
-            "tools": {},
-        },
-        "serverInfo": SERVER_INFO,
-    }
-    send_response(request_id, result)
-
-
-def handle_tools_list(request_id: Any) -> None:
-    tools = [
-        {
-            "name": name,
-            "description": meta["description"],
-            "inputSchema": meta["inputSchema"],
-        }
+def build_tool_definitions() -> list[mcp_types.Tool]:
+    return [
+        mcp_types.Tool(
+            name=name,
+            title=name,
+            description=meta["description"],
+            inputSchema=meta["inputSchema"],
+        )
         for name, meta in TOOLS.items()
     ]
-    send_response(request_id, {"tools": tools})
 
 
-def handle_tools_call(request_id: Any, params: dict[str, Any]) -> None:
-    tool_name = params.get("name")
-    arguments = params.get("arguments") or {}
+def to_call_tool_result(result: dict[str, Any]) -> mcp_types.CallToolResult:
+    content_blocks: list[mcp_types.ContentBlock] = []
+    for item in result.get("content", []):
+        if item.get("type") == "text":
+            content_blocks.append(mcp_types.TextContent(type="text", text=item.get("text", "")))
+    return mcp_types.CallToolResult(
+        content=content_blocks,
+        structuredContent=result.get("structuredContent"),
+        isError=bool(result.get("isError", False)),
+    )
+
+
+SDK_SERVER = Server(
+    name=SERVER_INFO["name"],
+    version=SERVER_INFO["version"],
+    instructions=(
+        "RelayKit harness augmentation tools for multi-tool, human-in-the-loop parallel execution."
+    ),
+)
+
+
+@SDK_SERVER.list_tools()
+async def handle_list_tools() -> list[mcp_types.Tool]:
+    log_event("tools/list request", level="info")
+    tools = build_tool_definitions()
+    log_event(f"tools/list response count={len(tools)}", level="info")
+    return tools
+
+
+@SDK_SERVER.call_tool(validate_input=True)
+async def handle_call_tool(name: str, arguments: dict[str, Any] | None) -> mcp_types.CallToolResult:
+    tool_name = name
+    tool_arguments = arguments or {}
+    log_event(f"tools/call request tool={tool_name!r}", level="info")
     if tool_name not in TOOLS:
-        send_response(
-            request_id,
+        return to_call_tool_result(
             make_text_result(
                 json_text({"error": f"unknown tool `{tool_name}`"}),
                 structured={"error": f"unknown tool `{tool_name}`"},
                 is_error=True,
-            ),
+            )
         )
-        return
     try:
-        result = TOOLS[tool_name]["handler"](arguments)
+        result = TOOLS[tool_name]["handler"](tool_arguments)
     except Exception as exc:
+        log_event(f"tools/call error tool={tool_name!r} error={exc}", level="error")
         result = make_text_result(
             json_text({"error": str(exc)}),
             structured={"error": str(exc)},
             is_error=True,
         )
-    send_response(request_id, result)
+    log_event(f"tools/call response tool={tool_name!r}", level="info")
+    return to_call_tool_result(result)
 
 
-def handle_request(request: dict[str, Any]) -> None:
-    request_id = request.get("id")
-    method = request.get("method")
-    params = request.get("params") or {}
-
-    if method == "initialize":
-        handle_initialize(request_id, params)
-        return
-    if method == "tools/list":
-        handle_tools_list(request_id)
-        return
-    if method == "tools/call":
-        handle_tools_call(request_id, params)
-        return
-    if method == "ping":
-        send_response(request_id, {})
-        return
-    if method in {
-        "notifications/initialized",
-        "initialized",
-        "notifications/cancelled",
-        "logging/setLevel",
-    }:
-        return
-    if request_id is not None:
-        send_error(request_id, -32601, f"Method not found: {method}")
+async def run_stdio_server() -> None:
+    init_options = SDK_SERVER.create_initialization_options(
+        notification_options=NotificationOptions(),
+        experimental_capabilities={},
+    )
+    log_event(
+        f"server starting root={ROOT} cwd={Path.cwd()} argv={sys.argv[1:]}",
+        level="info",
+    )
+    async with stdio_server() as (read_stream, write_stream):
+        await SDK_SERVER.run(
+            read_stream,
+            write_stream,
+            init_options,
+        )
 
 
 def main() -> int:
     argv = sys.argv[1:]
-    if any(arg in {"-h", "--help", "help"} for arg in argv):
+    passthrough_argv = [arg for arg in argv if arg != "-"]
+    if any(arg in {"-h", "--help", "help"} for arg in passthrough_argv):
         print(f"{SERVER_INFO['title']} ({SERVER_INFO['name']})")
         print("Usage: relaykit-mcp")
         print("Runs a long-lived MCP server over stdio.")
@@ -1177,26 +1164,28 @@ def main() -> int:
         print("Flags:")
         print("  --help     Show this message and exit.")
         print("  --version  Show the server version and exit.")
+        print("  -          Accepted as a no-op stdio marker for MCP clients.")
         return 0
-    if "--version" in argv:
+    if "--version" in passthrough_argv:
         print(f"{SERVER_INFO['name']} {SERVER_INFO['version']}")
         return 0
-    if argv:
+    if passthrough_argv:
         print(
-            f"{SERVER_INFO['name']}: unexpected arguments: {' '.join(argv)}",
+            f"{SERVER_INFO['name']}: unexpected arguments: {' '.join(passthrough_argv)}",
             file=sys.stderr,
         )
         print("Run with --help for usage.", file=sys.stderr)
         return 2
-    while True:
-        request = read_message()
-        if request is None:
-            return 0
-        try:
-            handle_request(request)
-        except Exception as exc:
-            if "id" in request:
-                send_error(request.get("id"), -32000, str(exc))
+    try:
+        anyio.run(run_stdio_server)
+    except KeyboardInterrupt:
+        log_event("server interrupted; exiting", level="info")
+        return 0
+    except Exception as exc:
+        log_event(f"server failure error={exc}", level="error")
+        raise
+    log_event("stdio closed; server exiting", level="info")
+    return 0
 
 
 if __name__ == "__main__":

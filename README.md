@@ -18,6 +18,8 @@ relaykit-mcp --help
 
 `pipx` installs into an isolated environment and puts `relaykit` and `relaykit-mcp` on your PATH globally. No venv activation, works from any directory or shell.
 
+The installed `relaykit-mcp` entry point is the preferred MCP launch path across Codex, Claude Code, Gemini CLI, and Antigravity. It avoids raw source-tree config and keeps host wiring consistent.
+
 **Skills only — zero dependencies (Claude Code):**
 
 ```bash
@@ -89,7 +91,7 @@ If your host supports MCP, add this to its config:
 }
 ```
 
-`relaykit-mcp` is registered as an entry point during install — no path needed. It is a long-lived stdio server. `relaykit-mcp --help` and `relaykit-mcp --version` are safe to run; no arguments starts the server.
+`relaykit-mcp` is registered as an entry point during install — no path needed. It is a long-lived stdio server backed by the official Python MCP SDK. `relaykit-mcp --help` and `relaykit-mcp --version` are safe to run; no arguments starts the server.
 
 If you installed via venv instead of `pipx`, use the full path:
 
@@ -164,7 +166,8 @@ See the [end-to-end walkthrough](examples/basic-workspace/WALKTHROUGH.md) for a 
 ## Requirements
 
 - Python 3.11+
-- No third-party dependencies
+- Small runtime dependencies: `anyio` and `mcp`
+- Skills-only install still has no Python dependency requirement
 
 ## License
 
