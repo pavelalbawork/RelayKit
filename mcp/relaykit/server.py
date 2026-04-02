@@ -678,7 +678,7 @@ def tool_reflect_task(arguments: dict[str, Any]) -> dict[str, Any]:
 
 TOOLS: dict[str, dict[str, Any]] = {
     "relaykit_doctor": {
-        "description": "Validate the RelayKit harness-augmentation runtime and inspect workspace or project profiles.",
+        "description": "Safe first RelayKit MCP call. Validate runtime state and inspect workspace or project profiles. If the workspace profile is missing, this tool still succeeds and reports the missing status plus next_actions instead of failing.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -696,7 +696,7 @@ TOOLS: dict[str, dict[str, Any]] = {
         "handler": tool_doctor,
     },
     "relaykit_host_status": {
-        "description": "Report whether one or more harnesses are ready for RelayKit and return recommended onboarding actions.",
+        "description": "Report whether one or more harnesses are ready for RelayKit and return recommended onboarding actions before any task flow starts.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -708,7 +708,7 @@ TOOLS: dict[str, dict[str, Any]] = {
         "handler": tool_host_status,
     },
     "relaykit_bootstrap_host": {
-        "description": "Install RelayKit skills and auto-configurable wiring for one or more supported harnesses.",
+        "description": "Install RelayKit skills and auto-configurable wiring for one or more supported harnesses. Prefer this over manual config edits when MCP is available.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -833,7 +833,7 @@ TOOLS: dict[str, dict[str, Any]] = {
         "handler": tool_render_prompt_stack,
     },
     "relaykit_init_workspace": {
-        "description": "Write a RelayKit workspace profile with defaults or explicit overrides.",
+        "description": "Write a RelayKit workspace profile with defaults or explicit overrides. Use this after relaykit_doctor when workspace_profile.status is missing.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -894,7 +894,7 @@ TOOLS: dict[str, dict[str, Any]] = {
         "handler": tool_init_persona,
     },
     "relaykit_start_task": {
-        "description": "Start a RelayKit intake flow for a multi-harness task and return the next clarification question or recommendation.",
+        "description": "Start a RelayKit intake flow for a task and return the next clarification question or recommendation. Prefer this MCP tool over shelling out to the relaykit CLI when available.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -913,7 +913,7 @@ TOOLS: dict[str, dict[str, Any]] = {
         "handler": tool_start_task,
     },
     "relaykit_answer_task": {
-        "description": "Answer the current clarification question for a RelayKit task or skip remaining clarification.",
+        "description": "Answer the current clarification question for a RelayKit task or skip remaining clarification to get a recommendation.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -951,7 +951,7 @@ TOOLS: dict[str, dict[str, Any]] = {
         "handler": tool_show_task,
     },
     "relaykit_confirm_task": {
-        "description": "Accept a RelayKit lane recommendation or request setup changes.",
+        "description": "Accept a RelayKit lane recommendation or request setup changes after clarification is complete.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -970,7 +970,7 @@ TOOLS: dict[str, dict[str, Any]] = {
         "handler": tool_confirm_task,
     },
     "relaykit_checkpoint_task": {
-        "description": "Record a checkpoint and get continuation guidance for a RelayKit task.",
+        "description": "Record a checkpoint and get continuation guidance for a RelayKit task after work begins.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -1045,7 +1045,7 @@ TOOLS: dict[str, dict[str, Any]] = {
         "handler": tool_render_task_part,
     },
     "relaykit_reflect_task": {
-        "description": "Propose or record a post-task reflection so RelayKit can learn from overhead and tool fit.",
+        "description": "Record a post-task reflection so RelayKit can learn from overhead and tool fit after the task is done.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -1073,7 +1073,7 @@ def build_tool_definitions() -> list[mcp_types.Tool]:
     return [
         mcp_types.Tool(
             name=name,
-            title=name,
+            title="RelayKit " + " ".join(part.capitalize() for part in name.split("_")[1:]),
             description=meta["description"],
             inputSchema=meta["inputSchema"],
         )
