@@ -7,6 +7,7 @@ from copy import deepcopy
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -62,6 +63,7 @@ SUPPORTED_MCP_AUTO_HOSTS = tuple(HOST_MCP_TARGETS.keys())
 SUPPORTED_SKILL_AUTO_HOSTS = tuple(HOST_SKILL_HOMES.keys())
 SMOKE_TASK_TEXT = "Make a tiny login validation tweak and verify it"
 SMOKE_FIRST_ANSWER = "In scope: login validation only. Out of scope: backend and styling."
+EXECUTION_CONTEXT_FILENAME = "execution-context.json"
 
 
 def fail(message: str, *, details: list[str] | None = None) -> None:
@@ -91,6 +93,449 @@ def read_json(path: Path) -> dict:
 def write_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def execution_context_path(root: Path, registry: dict) -> Path:
+    return root / registry["defaults"]["profile_dirname"] / EXECUTION_CONTEXT_FILENAME
+
+
+def validated_command(
+    command: str,
+    *,
+    source: str,
+    description: str,
+) -> dict[str, str]:
+    return {
+        "command": command,
+        "source": source,
+        "description": description,
+        "validated_at": taskflow.now_iso(),
+    }
+
+
+def _first_nonempty_line(text: str) -> str:
+    for line in text.splitlines():
+        line = line.strip()
+        if line:
+            return line
+    return ""
+
+
+def _normalize_path_token(token: str, *, root: Path) -> str:
+    candidate = Path(token)
+    if not candidate.is_absolute():
+        candidate = root / candidate
+    return str(candidate.resolve())
+
+
+def _extract_verification_targets(text: str) -> list[str]:
+    commands: list[str] = []
+    seen: set[str] = set()
+    patterns = (
+        r"verification(?:\s+target)?\s*:\s*`([^`]+)`",
+        r"verification(?:\s+target)?\s*:\s*\"([^\"]+)\"",
+        r"verification(?:\s+target)?\s*:\s*'([^']+)'",
+    )
+    for pattern in patterns:
+        for match in re.finditer(pattern, text, flags=re.IGNORECASE):
+            command = match.group(1).strip()
+            if command and command not in seen:
+                seen.add(command)
+                commands.append(command)
+    return commands
+
+
+def _project_guidance_files(*, workspace_root: Path | None, project_root: Path | None) -> list[Path]:
+    files: list[Path] = []
+    seen: set[Path] = set()
+    for root in (project_root, workspace_root):
+        if root is None:
+            continue
+        for name in ("AGENTS.md", "README.md"):
+            candidate = root / name
+            if candidate.exists() and candidate not in seen:
+                seen.add(candidate)
+                files.append(candidate)
+    return files
+
+
+def _run_probe_command(command: list[str], *, cwd: Path) -> tuple[bool, str]:
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=str(cwd),
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as error:
+        return False, str(error)
+    if completed.returncode == 0:
+        return True, ""
+    summary = _first_nonempty_line(completed.stderr) or _first_nonempty_line(completed.stdout) or f"exit code {completed.returncode}"
+    return False, summary
+
+
+def _validate_command_targets(tokens: list[str], *, cwd: Path) -> tuple[bool, str]:
+    path_like_tokens = [
+        token
+        for token in tokens
+        if token
+        and not token.startswith("-")
+        and ("/" in token or token.startswith(".") or token.endswith((".py", ".js", ".ts")))
+    ]
+    for token in path_like_tokens:
+        candidate = Path(token)
+        if not candidate.is_absolute():
+            candidate = cwd / candidate
+        if not candidate.exists():
+            return False, f"missing target `{token}`"
+    return True, ""
+
+
+def _validate_explicit_verification_command(
+    command: str,
+    *,
+    project_root: Path,
+) -> tuple[dict[str, str] | None, list[str], bool]:
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return None, [f"Could not parse project verification target `{command}`."], False
+    if not tokens:
+        return None, [], False
+
+    def success(description: str, note: str | None = None) -> tuple[dict[str, str], list[str], bool]:
+        notes = [note] if note else []
+        return (
+            validated_command(
+                command,
+                source="verification-target",
+                description=description,
+            ),
+            notes,
+            True,
+        )
+
+    if len(tokens) >= 3 and tokens[1] == "-m" and tokens[2] == "pytest":
+        targets_ok, target_note = _validate_command_targets(tokens[3:], cwd=project_root)
+        if not targets_ok:
+            return None, [f"Project verification target `{command}` is not runnable here: {target_note}."], True
+        available, detail = _run_probe_command([tokens[0], "-m", "pytest", "--version"], cwd=project_root)
+        if available:
+            return success("Validated project verification target", "Project verification target is available locally and ready to run.")
+        return None, [f"Project verification target `{command}` is not runnable here: {detail}."], True
+
+    if tokens[0] == "pytest":
+        targets_ok, target_note = _validate_command_targets(tokens[1:], cwd=project_root)
+        if not targets_ok:
+            return None, [f"Project verification target `{command}` is not runnable here: {target_note}."], True
+        available, detail = _run_probe_command(["pytest", "--version"], cwd=project_root)
+        if available:
+            return success("Validated project verification target", "Project verification target is available locally and ready to run.")
+        return None, [f"Project verification target `{command}` is not runnable here: {detail}."], True
+
+    if len(tokens) >= 3 and tokens[1] == "-m" and tokens[2] == "unittest":
+        start_dir = None
+        for index, token in enumerate(tokens[3:], start=3):
+            if token == "-s" and index + 1 < len(tokens):
+                start_dir = tokens[index + 1]
+                break
+        if start_dir:
+            target_path = Path(start_dir)
+            if not target_path.is_absolute():
+                target_path = project_root / target_path
+            if not target_path.exists():
+                return None, [f"Project verification target `{command}` is not runnable here: missing target `{start_dir}`."], True
+        available, detail = _run_probe_command([tokens[0], "-m", "unittest", "-h"], cwd=project_root)
+        if available:
+            return success("Validated project verification target", "Project verification target is available locally and ready to run.")
+        return None, [f"Project verification target `{command}` is not runnable here: {detail}."], True
+
+    if tokens[:2] == ["npm", "test"]:
+        package_json = project_root / "package.json"
+        if not package_json.exists():
+            return None, [f"Project verification target `{command}` is not runnable here: missing package.json."], True
+        available, detail = _run_probe_command(["npm", "--version"], cwd=project_root)
+        if available:
+            return success("Validated project verification target", "Project verification target is available locally and ready to run.")
+        return None, [f"Project verification target `{command}` is not runnable here: {detail}."], True
+
+    if len(tokens) >= 3 and tokens[:2] == ["npm", "run"]:
+        package_json = project_root / "package.json"
+        if not package_json.exists():
+            return None, [f"Project verification target `{command}` is not runnable here: missing package.json."], True
+        available, detail = _run_probe_command(["npm", "--version"], cwd=project_root)
+        if available:
+            return success("Validated project verification target", "Project verification target is available locally and ready to run.")
+        return None, [f"Project verification target `{command}` is not runnable here: {detail}."], True
+
+    if tokens[:2] == ["cargo", "test"]:
+        if not (project_root / "Cargo.toml").exists():
+            return None, [f"Project verification target `{command}` is not runnable here: missing Cargo.toml."], True
+        available, detail = _run_probe_command(["cargo", "--version"], cwd=project_root)
+        if available:
+            return success("Validated project verification target", "Project verification target is available locally and ready to run.")
+        return None, [f"Project verification target `{command}` is not runnable here: {detail}."], True
+
+    if tokens[:2] == ["go", "test"]:
+        if not ((project_root / "go.mod").exists() or (project_root / "go.work").exists()):
+            return None, [f"Project verification target `{command}` is not runnable here: missing go.mod/go.work."], True
+        available, detail = _run_probe_command(["go", "version"], cwd=project_root)
+        if available:
+            return success("Validated project verification target", "Project verification target is available locally and ready to run.")
+        return None, [f"Project verification target `{command}` is not runnable here: {detail}."], True
+
+    return None, [], False
+
+
+def _discover_unittest_fallback(
+    *,
+    project_root: Path,
+    preferred_python: str = "python3",
+) -> tuple[dict[str, str] | None, list[str]]:
+    for start_dir in ("tests", "src"):
+        root = project_root / start_dir
+        if not root.exists():
+            continue
+        test_files = sorted(root.rglob("test_*.py"))
+        if not test_files:
+            continue
+        if not any(
+            "import unittest" in file.read_text(encoding="utf-8", errors="ignore")
+            or "unittest.TestCase" in file.read_text(encoding="utf-8", errors="ignore")
+            for file in test_files[:10]
+        ):
+            continue
+        available, detail = _run_probe_command([preferred_python, "-m", "unittest", "-h"], cwd=project_root)
+        if available:
+            command = f"{preferred_python} -m unittest discover -s {start_dir} -v"
+            return (
+                validated_command(
+                    command,
+                    source="verification-fallback",
+                    description="Validated fallback verification command",
+                ),
+                [f"Fell back to `{command}` because the declared project verification target is not runnable here."],
+            )
+        return None, [f"Could not validate fallback unittest command: {detail}."]
+    return None, []
+
+
+def discover_execution_context(
+    *,
+    workspace_root: Path | None,
+    project_root: Path | None,
+) -> dict[str, object] | None:
+    notes: list[str] = []
+    validated_commands: list[dict[str, str]] = []
+    if project_root is None:
+        return None
+
+    preferred_python = "python3"
+    found_candidates = False
+    explicit_unavailable = False
+    for guidance_path in _project_guidance_files(workspace_root=workspace_root, project_root=project_root):
+        text = guidance_path.read_text(encoding="utf-8", errors="ignore")
+        for command in _extract_verification_targets(text):
+            found_candidates = True
+            command_payload, command_notes, handled = _validate_explicit_verification_command(
+                command,
+                project_root=project_root,
+            )
+            if command_payload is not None:
+                validated_commands.append(command_payload)
+            for note in command_notes:
+                if note not in notes:
+                    notes.append(note)
+            if handled and len(command.split()) >= 1:
+                try:
+                    tokens = shlex.split(command)
+                    if len(tokens) >= 1 and tokens[0].startswith("python"):
+                        preferred_python = tokens[0]
+                except ValueError:
+                    pass
+            if command_payload is not None:
+                return _normalize_execution_context(
+                    {
+                        "validated_commands": validated_commands,
+                        "notes": notes,
+                    }
+                )
+            if handled:
+                explicit_unavailable = True
+
+    if explicit_unavailable:
+        fallback_payload, fallback_notes = _discover_unittest_fallback(
+            project_root=project_root,
+            preferred_python=preferred_python,
+        )
+        if fallback_payload is not None:
+            validated_commands.append(fallback_payload)
+        for note in fallback_notes:
+            if note not in notes:
+                notes.append(note)
+
+    if not validated_commands and not notes and not found_candidates:
+        return None
+    return _normalize_execution_context(
+        {
+            "validated_commands": validated_commands,
+            "notes": notes,
+        }
+    )
+
+
+def _normalize_execution_context(payload: dict | None) -> dict[str, object] | None:
+    if not isinstance(payload, dict):
+        return None
+    commands_raw = payload.get("validated_commands") or []
+    notes_raw = payload.get("notes") or payload.get("runtime_notes") or []
+    validated_commands: list[dict[str, str]] = []
+    seen_commands: set[str] = set()
+    for item in commands_raw:
+        if not isinstance(item, dict):
+            continue
+        command = str(item.get("command") or "").strip()
+        if not command or command in seen_commands:
+            continue
+        seen_commands.add(command)
+        normalized = {"command": command}
+        for key in ("source", "description", "validated_at"):
+            value = str(item.get(key) or "").strip()
+            if value:
+                normalized[key] = value
+        validated_commands.append(normalized)
+    notes: list[str] = []
+    for item in notes_raw:
+        note = str(item).strip()
+        if note and note not in notes:
+            notes.append(note)
+    if not validated_commands and not notes:
+        return None
+    return {
+        "validated_commands": validated_commands,
+        "notes": notes,
+        "updated_at": str(payload.get("updated_at") or taskflow.now_iso()),
+    }
+
+
+def merge_execution_context(
+    base: dict | None,
+    extra: dict | None,
+) -> dict[str, object] | None:
+    normalized_base = _normalize_execution_context(base) or {
+        "validated_commands": [],
+        "notes": [],
+        "updated_at": taskflow.now_iso(),
+    }
+    normalized_extra = _normalize_execution_context(extra)
+    if normalized_extra is None:
+        return normalized_base if normalized_base["validated_commands"] or normalized_base["notes"] else None
+    merged_commands = list(normalized_base["validated_commands"])
+    seen = {item["command"] for item in merged_commands}
+    for item in normalized_extra["validated_commands"]:
+        if item["command"] in seen:
+            continue
+        seen.add(item["command"])
+        merged_commands.append(item)
+    merged_notes = list(normalized_base["notes"])
+    for note in normalized_extra["notes"]:
+        if note not in merged_notes:
+            merged_notes.append(note)
+    if not merged_commands and not merged_notes:
+        return None
+    return {
+        "validated_commands": merged_commands,
+        "notes": merged_notes,
+        "updated_at": taskflow.now_iso(),
+    }
+
+
+def load_execution_context_for_root(root: Path | None, registry: dict) -> dict[str, object] | None:
+    if root is None:
+        return None
+    path = execution_context_path(root, registry)
+    if not path.exists():
+        return None
+    try:
+        payload = read_json(path)
+    except json.JSONDecodeError:
+        return None
+    return _normalize_execution_context(payload)
+
+
+def persist_execution_context(
+    registry: dict,
+    *,
+    workspace_root: Path | None,
+    project_root: Path | None = None,
+    payload: dict | None,
+) -> list[str]:
+    normalized = _normalize_execution_context(payload)
+    if normalized is None:
+        return []
+    paths: list[str] = []
+    seen_roots: set[Path] = set()
+    for root in (workspace_root, project_root):
+        if root is None:
+            continue
+        resolved = root.resolve()
+        if resolved in seen_roots:
+            continue
+        seen_roots.add(resolved)
+        path = execution_context_path(resolved, registry)
+        merged = merge_execution_context(load_execution_context_for_root(resolved, registry), normalized)
+        if merged is None:
+            continue
+        write_json(path, merged)
+        paths.append(str(path))
+    return paths
+
+
+def load_task_execution_context(
+    registry: dict,
+    *,
+    workspace_root: Path | None,
+    project_root: Path | None,
+) -> dict[str, object] | None:
+    merged = merge_execution_context(
+        load_execution_context_for_root(workspace_root, registry),
+        load_execution_context_for_root(project_root, registry),
+    )
+    return merged
+
+
+def doctor_execution_context_payload(
+    *,
+    workspace_root: Path,
+    project_root: Path | None,
+) -> dict[str, object]:
+    payload = discover_execution_context(
+        workspace_root=workspace_root,
+        project_root=project_root,
+    )
+    if payload is not None:
+        return payload
+    return {"notes": [f"{PRODUCT_NAME} doctor completed successfully for this workspace context."]}
+
+
+def setup_execution_context_payload(*, hosts: list[str], workspace_root: Path) -> dict[str, object]:
+    notes = [f"{PRODUCT_NAME} host setup completed for {', '.join(hosts)}."]
+    return {"notes": notes}
+
+
+def smoke_execution_context_payload(
+    *,
+    host_name: str,
+    workspace_root: Path,
+    initialized_workspace: bool,
+) -> dict[str, object]:
+    notes = [f"{PRODUCT_NAME} smoke flow completed successfully for host `{host_name}`."]
+    if initialized_workspace:
+        notes.append(f"{PRODUCT_NAME} initialized a default workspace profile during smoke setup.")
+    return {"notes": notes}
 
 
 def onboarding_state_path() -> Path:
@@ -1963,6 +2408,11 @@ def build_doctor_payload(
             "relaykit init-project "
             f"--project-root {project_root.resolve()} --use-workspace-defaults"
         )
+    execution_context = discover_execution_context(
+        workspace_root=workspace_root,
+        project_root=project_root,
+    )
+
     payload: dict[str, object] = {
         "product": PRODUCT_NAME,
         "registry": {
@@ -1979,6 +2429,8 @@ def build_doctor_payload(
         "persona_layer": persona_layer_summary(registry),
         "next_actions": next_actions,
     }
+    if execution_context is not None:
+        payload["execution_context"] = execution_context
     if guided_setup:
         payload["guided_setup"] = guided_setup
     if requested_hosts or current_host:
@@ -2060,9 +2512,11 @@ def run_smoke_flow(workspace_root: Path, *, host_name: str, force_workspace_init
     doctor_status = doctor_payload["workspace_profile"]["status"]  # type: ignore[index]
     results.append({"step": "doctor", "status": "succeeded", "workspace_profile_status": doctor_status})
 
+    initialized_workspace = False
     if force_workspace_init or doctor_status == "missing":
         init_payload = init_workspace_profile_payload(workspace_root=workspace_root, force=force_workspace_init)
         results.append({"step": "init_workspace", "status": "succeeded", "workspace_profile": init_payload["workspace_profile"]})
+        initialized_workspace = True
 
     workspace_profile_path_resolved = workspace_profile_path(workspace_root, registry)
     workspace_profile = read_json(workspace_profile_path_resolved)
@@ -2132,12 +2586,26 @@ def run_smoke_flow(workspace_root: Path, *, host_name: str, force_workspace_init
     )
     results.append({"step": "reflect_task", "status": "succeeded"})
 
-    return {
+    execution_context_paths = persist_execution_context(
+        registry,
+        workspace_root=workspace_root,
+        payload=smoke_execution_context_payload(
+            host_name=host_name,
+            workspace_root=workspace_root,
+            initialized_workspace=initialized_workspace,
+        ),
+        project_root=None,
+    )
+
+    payload = {
         "workspace_root": str(workspace_root),
         "task_id": task_id,
         "results": results,
         "reflection": reflection,
     }
+    if execution_context_paths:
+        payload["execution_context_paths"] = execution_context_paths
+    return payload
 
 
 def command_init_workspace(args: argparse.Namespace) -> int:
@@ -2395,6 +2863,15 @@ def build_setup_payload(
             for host_name in hosts
         },
     }
+    if not dry_run and workspace_root is not None:
+        execution_context_paths = persist_execution_context(
+            load_registry(),
+            workspace_root=workspace_root,
+            payload=setup_execution_context_payload(hosts=hosts, workspace_root=workspace_root),
+            project_root=None,
+        )
+        if execution_context_paths:
+            payload["execution_context_paths"] = execution_context_paths
     if not dry_run and not skip_smoke:
         payload["smoke"] = {
             host_name: run_smoke_flow(
@@ -2584,15 +3061,28 @@ def command_smoke(args: argparse.Namespace) -> int:
 
 
 def command_doctor(args: argparse.Namespace) -> int:
+    registry = load_registry()
     workspace_root = Path(args.workspace_root).resolve() if args.workspace_root else Path.cwd().resolve()
+    project_root = Path(args.project_root).resolve() if args.project_root else None
     payload = build_doctor_payload(
         workspace_root=workspace_root,
-        project_root=Path(args.project_root).resolve() if args.project_root else None,
+        project_root=project_root,
         workspace_profile_override=Path(args.workspace_profile) if args.workspace_profile else None,
         project_profile_override=Path(args.project_profile) if args.project_profile else None,
         requested_hosts=args.host,
         current_host=args.current_host,
     )
+    execution_context_paths = persist_execution_context(
+        registry,
+        workspace_root=workspace_root,
+        project_root=project_root,
+        payload=doctor_execution_context_payload(
+            workspace_root=workspace_root,
+            project_root=project_root,
+        ),
+    )
+    if execution_context_paths:
+        payload["execution_context_paths"] = execution_context_paths
     print(json.dumps(payload, indent=2))
     has_blockers = bool(
         payload["registry"]["issues"]
@@ -2666,6 +3156,11 @@ def command_start_task(args: argparse.Namespace) -> int:
     if registry_issues:
         fail("registry validation failed", details=registry_issues)
     workspace_root, workspace_profile, project_root, project_profile, _storage_root = resolve_task_context(args, registry)
+    execution_context = load_task_execution_context(
+        registry,
+        workspace_root=workspace_root,
+        project_root=project_root,
+    )
     try:
         payload = taskflow.start_task(
             registry,
@@ -2678,6 +3173,7 @@ def command_start_task(args: argparse.Namespace) -> int:
             allowed_hosts=args.allowed_host or None,
             skip_clarification=bool(args.skip_clarification),
             dry_run=bool(getattr(args, "dry_run", False)),
+            execution_context=execution_context,
         )
     except ValueError as error:
         message, details = taskflow.parse_failure(error)
@@ -2806,6 +3302,30 @@ def command_checkpoint_task(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_checkpoint_phase(args: argparse.Namespace) -> int:
+    registry = load_registry()
+    registry_issues = validate_registry(registry)
+    if registry_issues:
+        fail("registry validation failed", details=registry_issues)
+    _workspace_root, _workspace_profile, _project_root, _project_profile, storage_root = resolve_task_context(args, registry)
+    try:
+        reports = json.loads(args.reports)
+        if not isinstance(reports, list):
+            fail("checkpoint-phase requires --reports to decode to a JSON array")
+        payload = taskflow.checkpoint_phase(
+            registry,
+            root=storage_root,
+            task_id=args.task_id,
+            phase_id=args.phase_id,
+            reports=reports,
+        )
+    except ValueError as error:
+        message, details = taskflow.parse_failure(error)
+        fail(message, details=details)
+    print_taskflow_payload(payload)
+    return 0
+
+
 def command_advance_task(args: argparse.Namespace) -> int:
     registry = load_registry()
     registry_issues = validate_registry(registry)
@@ -2862,6 +3382,31 @@ def command_render_task_part(args: argparse.Namespace) -> int:
             root=storage_root,
             task_id=args.task_id,
             part_id=args.part_id,
+            verbosity=args.verbosity,
+        )
+    except ValueError as error:
+        message, details = taskflow.parse_failure(error)
+        fail(message, details=details)
+    if args.format == "markdown":
+        print(payload["markdown"], end="")
+    else:
+        print_taskflow_payload(payload)
+    return 0
+
+
+def command_render_consolidation_packet(args: argparse.Namespace) -> int:
+    registry = load_registry()
+    registry_issues = validate_registry(registry)
+    if registry_issues:
+        fail("registry validation failed", details=registry_issues)
+    _workspace_root, _workspace_profile, _project_root, _project_profile, storage_root = resolve_task_context(args, registry)
+    try:
+        payload = taskflow.render_consolidation_packet(
+            registry,
+            root=storage_root,
+            task_id=args.task_id,
+            phase_id=args.phase_id,
+            verbosity=args.verbosity,
         )
     except ValueError as error:
         message, details = taskflow.parse_failure(error)
@@ -2992,6 +3537,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser_checkpoint_task.add_argument("--artifacts", help="JSON object with findings, files_discovered, decisions, blockers.")
     parser_checkpoint_task.set_defaults(func=command_checkpoint_task)
 
+    parser_checkpoint_phase = subparsers.add_parser(
+        "checkpoint-phase",
+        help="Record a batch checkpoint for multiple task parts in the current phase.",
+    )
+    add_task_context_arguments(parser_checkpoint_phase)
+    parser_checkpoint_phase.add_argument("--task-id", required=True)
+    parser_checkpoint_phase.add_argument("--phase-id")
+    parser_checkpoint_phase.add_argument(
+        "--reports",
+        required=True,
+        help="JSON array of report objects with part_id, optional outcome, notes, optional artifacts, and optional report_markdown.",
+    )
+    parser_checkpoint_phase.set_defaults(func=command_checkpoint_phase)
+
     parser_prepare_git = subparsers.add_parser(
         "prepare-git",
         help="Create git branches for the current task parts after explicit confirmation.",
@@ -3028,8 +3587,20 @@ def build_parser() -> argparse.ArgumentParser:
     add_task_context_arguments(parser_render_task_part)
     parser_render_task_part.add_argument("--task-id", required=True)
     parser_render_task_part.add_argument("--part-id", required=True)
+    parser_render_task_part.add_argument("--verbosity", choices=sorted(taskflow.HANDOFF_VERBOSITIES), default="compact")
     parser_render_task_part.add_argument("--format", choices=["json", "markdown"], default="json")
     parser_render_task_part.set_defaults(func=command_render_task_part)
+
+    parser_render_consolidation = subparsers.add_parser(
+        "render-consolidation-packet",
+        help="Render a consolidation packet for the current or requested phase.",
+    )
+    add_task_context_arguments(parser_render_consolidation)
+    parser_render_consolidation.add_argument("--task-id", required=True)
+    parser_render_consolidation.add_argument("--phase-id")
+    parser_render_consolidation.add_argument("--verbosity", choices=sorted(taskflow.HANDOFF_VERBOSITIES), default="compact")
+    parser_render_consolidation.add_argument("--format", choices=["json", "markdown"], default="json")
+    parser_render_consolidation.set_defaults(func=command_render_consolidation_packet)
 
     parser_reflect_task = subparsers.add_parser(
         "reflect-task",

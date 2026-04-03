@@ -10,10 +10,12 @@
 | `show-task` | View current task state and lane assignments |
 | `list-tasks` | Enumerate tasks under the current workspace or project storage root |
 | `checkpoint-task` | Record progress at a named milestone |
+| `checkpoint-phase` | Record a batch checkpoint for multiple task parts in the current phase |
 | `prepare-git` | Explicitly create per-task-part git branches after confirmation |
 | `advance-task` | Apply a setup or phase change after checkpoint |
 | `resume-task` | Resume a paused task with context for the active lanes |
-| `render-task-part` | Render the launch bundle for one task part |
+| `render-task-part` | Render one task part as a compact or verbose launch bundle |
+| `render-consolidation-packet` | Generate a consolidation handoff from the latest phase checkpoints |
 | `reflect-task` | Post-task learning: was the multi-harness setup worth it? |
 
 ## Setup
@@ -59,11 +61,24 @@ relaykit answer-task --workspace-root . --task-id <id> --answer "Only touch auth
 relaykit confirm-task --workspace-root . --task-id <id> --accept
 ```
 
-**Full coordinated task with checkpoints:**
+**Lean coordinated task (default for small bounded two-part work):**
+```bash
+relaykit start-task --workspace-root . --task "Fix malformed stored hash handling in login and review the change"
+# ... answer questions ...
+relaykit confirm-task --workspace-root . --task-id <id> --accept
+relaykit checkpoint-phase --workspace-root . --task-id <id> --reports '[{"part_id":"implementation","notes":"builder done"},{"part_id":"critique","notes":"critic agrees"}]'
+relaykit render-consolidation-packet --workspace-root . --task-id <id>
+relaykit reflect-task --workspace-root . --task-id <id> --split-worth-it yes --tool-fit good
+```
+
+`confirm-task` returns a `launch_bundle` automatically on lean coordinated runs, so you usually do not need separate `render-task-part` calls unless you want a verbose packet or need to re-render later. Compact launch markdown omits empty task-context fields and keeps the machine-readable handoff card in the structured payload instead of repeating it inline.
+
+**Full coordinated task with explicit per-part rendering and checkpoints:**
 ```bash
 relaykit start-task --workspace-root . --task "Redesign the dashboard"
 # ... answer questions ...
 relaykit confirm-task --workspace-root . --task-id <id> --accept
+relaykit render-task-part --workspace-root . --task-id <id> --part-id implementation --verbosity verbose
 relaykit checkpoint-task --workspace-root . --task-id <id> --notes "Layout done"
 relaykit advance-task --workspace-root . --task-id <id>
 relaykit resume-task --workspace-root . --task-id <id>
@@ -74,4 +89,4 @@ relaykit reflect-task --workspace-root . --task-id <id> --split-worth-it yes --t
 
 The MCP server exposes the operational RelayKit commands as tools prefixed with `relaykit_`:
 
-`relaykit_start_task`, `relaykit_answer_task`, `relaykit_confirm_task`, `relaykit_show_task`, `relaykit_list_tasks`, `relaykit_checkpoint_task`, `relaykit_prepare_git`, `relaykit_advance_task`, `relaykit_resume_task`, `relaykit_render_task_part`, `relaykit_reflect_task`, `relaykit_host_status`, `relaykit_guided_setup`, `relaykit_setup`, `relaykit_bootstrap_host`, `relaykit_uninstall_host`, `relaykit_acknowledge_host`, `relaykit_install_self`, `relaykit_smoke`, `relaykit_doctor`, `relaykit_list`, `relaykit_preset`, `relaykit_stack`, `relaykit_render_prompt_stack`, `relaykit_init_workspace`, `relaykit_init_project`, `relaykit_init_persona`.
+`relaykit_start_task`, `relaykit_answer_task`, `relaykit_confirm_task`, `relaykit_show_task`, `relaykit_list_tasks`, `relaykit_checkpoint_task`, `relaykit_checkpoint_phase`, `relaykit_prepare_git`, `relaykit_advance_task`, `relaykit_resume_task`, `relaykit_render_task_part`, `relaykit_render_consolidation_packet`, `relaykit_reflect_task`, `relaykit_host_status`, `relaykit_guided_setup`, `relaykit_setup`, `relaykit_bootstrap_host`, `relaykit_uninstall_host`, `relaykit_acknowledge_host`, `relaykit_install_self`, `relaykit_smoke`, `relaykit_doctor`, `relaykit_list`, `relaykit_preset`, `relaykit_stack`, `relaykit_render_prompt_stack`, `relaykit_init_workspace`, `relaykit_init_project`, `relaykit_init_persona`.

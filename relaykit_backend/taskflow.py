@@ -31,6 +31,7 @@ CHECKPOINT_ACTIONS = {
 CHANGE_REASONS = {"stage_change", "setup_underperformed", "new_information", "scope_change", "none"}
 REFLECTION_VALUES = {"yes", "no", "mixed", "unknown"}
 TOOL_FIT_VALUES = {"good", "bad", "mixed", "unknown"}
+HANDOFF_VERBOSITIES = {"compact", "verbose"}
 TOOL_COST = {
     "gpt-5.4": "high",
     "gpt-5.4-mini": "low",
@@ -248,6 +249,7 @@ def _append_scratchpad_entry(
     part_id: str | None,
     notes: str,
     artifacts: dict[str, Any] | None,
+    report_markdown: str | None = None,
 ) -> Path:
     path = _create_scratchpad(state, registry)
     timestamp = now_iso()
@@ -275,6 +277,8 @@ def _append_scratchpad_entry(
             stat = git_diff.get("stat") or ""
             if stat:
                 lines.extend(["Git diff:", "```text", stat, "```", ""])
+    if report_markdown and report_markdown.strip():
+        lines.extend(["Report:", "", report_markdown.strip(), ""])
     path.write_text(path.read_text(encoding="utf-8") + "\n".join(lines) + "\n", encoding="utf-8")
     return path
 
@@ -1083,11 +1087,9 @@ def setup_recommendation(
         coordination = "coordinated"
 
     continuity = "lean"
-    if coordination == "coordinated" and (classification["confidence"] != "high" or flags["research"] or flags["pause_sensitive"]):
+    if flags["research"] or flags["pause_sensitive"] or flags["cross_project"]:
         continuity = "full"
     elif complexity >= 5:
-        continuity = "full"
-    elif flags["cross_project"]:
         continuity = "full"
 
     learned_coordination, learned_continuity = preferred_setup_for_archetype(
@@ -1113,6 +1115,24 @@ def setup_recommendation(
         continuity = manual_setup["continuity"]
 
     parts = choose_task_parts(classification, coordination=coordination, continuity=continuity)
+    manual_full_requested = manual_setup.get("continuity") == "full"
+    bounded_coordinated = (
+        coordination == "coordinated"
+        and len(parts) == 2
+        and not flags["research"]
+        and not flags["frontend"]
+        and not flags["cross_project"]
+        and not flags["pause_sensitive"]
+        and complexity < 5
+    )
+    if len(parts) > 2 and continuity != "full":
+        continuity = "full"
+        parts = choose_task_parts(classification, coordination=coordination, continuity=continuity)
+        bounded_coordinated = False
+    elif bounded_coordinated and continuity == "full" and not manual_full_requested:
+        continuity = "lean"
+        parts = choose_task_parts(classification, coordination=coordination, continuity=continuity)
+
     assigned_parts: list[dict[str, Any]] = []
     selected_hosts: list[str] = []
     selected_models: list[str] = []
@@ -1210,6 +1230,8 @@ def setup_recommendation(
     why_not_simpler = ""
     if coordination == "solo" and continuity == "lean":
         why_this_is_enough = "scope is bounded, the main task part is clear, and extra coordination would add more overhead than value."
+    elif coordination == "coordinated" and continuity == "lean":
+        why_this_is_enough = "the task benefits from a second lane, but it stays bounded enough that full continuity would add more overhead than value."
     else:
         why_not_simpler = (
             "the task has enough complexity, uncertainty, or verification pressure that a simpler setup would likely hide risk or overload one lane."
@@ -1281,6 +1303,18 @@ def part_reason(part: dict[str, Any], classification: dict[str, Any], host_name:
     if classification["task_type"] == "review-only":
         return f"{host_name} is being used as a pure review lane because the task does not require direct implementation ownership."
     return f"{host_name} is the best available fit for the main execution work under the current task constraints."
+
+
+def _phase_checkpointed_parts(phase: dict[str, Any]) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for event in phase.get("history", []):
+        part_id = event.get("part_id")
+        if not part_id or part_id in seen or not event.get("recommended_outcome"):
+            continue
+        seen.add(part_id)
+        ordered.append(part_id)
+    return ordered
 
 
 def list_tasks(
@@ -1656,6 +1690,7 @@ def start_task(
     allowed_hosts: list[str] | None = None,
     skip_clarification: bool = False,
     dry_run: bool = False,
+    execution_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not task_text.strip():
         fail("task text is required")
@@ -1722,6 +1757,7 @@ def start_task(
         "current_phase_id": None,
         "continuation": {},
         "reflection": [],
+        "execution_context": deepcopy(execution_context) if execution_context else None,
     }
     if skip_clarification and not effective_hosts:
         state["inventory"]["effective_hosts"] = workspace_available_hosts
@@ -1870,9 +1906,12 @@ def confirm_task(
     state["current_phase_id"] = phase_id
     state["confirmed_plan"] = deepcopy(recommendation)
     state["status"] = "active" if recommendation["setup"]["continuity"] == "full" else "launched"
+    launch_bundle = None
+    if recommendation["setup"]["continuity"] == "lean":
+        launch_bundle = build_launch_bundle(state, recommendation["task_parts"], registry, verbosity="compact")
     state["continuation"] = {
         "current_state": "The task is confirmed and ready to run.",
-        "next_best_action": "Start the first task part with the assigned tool and model.",
+        "next_best_action": "Launch the bundled task parts." if launch_bundle else "Start the first task part with the assigned tool and model.",
         "optional_parallel_follow_up": "None." if recommendation["setup"]["coordination"] == "solo" else "Start the secondary task part only after the primary lane is clearly underway.",
         "safe_stop_point": "You can stop after the first task part has a concrete result or blocker.",
         "resume_instructions": f"Run `relaykit.py resume-task --task-id {state['task_id']}` to continue.",
@@ -1884,6 +1923,8 @@ def confirm_task(
         "phase": phase,
         "continuation": state["continuation"],
     }
+    if launch_bundle:
+        payload["launch_bundle"] = launch_bundle
     git_enabled = git_module.resolve_git_config(workspace_profile, project_profile)
     repo_root = Path(state.get("project_root") or state.get("workspace_root") or ".")
     if git_enabled and git_module.is_git_repo(repo_root):
@@ -1963,45 +2004,19 @@ def checkpoint_task(
             break
     if phase is None:
         fail("current phase is missing")
-    event: dict[str, Any] = {
-        "at": now_iso(),
-        "notes": notes,
-        "recommended_outcome": final_outcome,
-        "recommended_action": action,
-        "change_reason": reason,
-    }
-    if part_id:
-        event["part_id"] = part_id
-    if artifacts:
-        event["artifacts"] = {
-            "findings": artifacts.get("findings", ""),
-            "files_discovered": artifacts.get("files_discovered", []),
-            "decisions": artifacts.get("decisions", ""),
-            "blockers": artifacts.get("blockers", []),
-        }
-    # --- resolve matched task part for git + checkpoint policy ---
-    matched_part = None
-    if part_id:
-        matched_part = next(
-            (tp for tp in phase.get("task_parts", []) if tp.get("part_id") == part_id),
-            None,
-        )
-    if matched_part and matched_part.get("git_branch"):
-        git_branch = matched_part["git_branch"]
-        if git_branch:
-            repo_root = Path(state.get("project_root") or state.get("workspace_root") or ".")
-            diff = git_module.part_diff_stat(repo_root, task_id, part_id)
-            if diff:
-                event.setdefault("artifacts", {})["git_diff"] = diff
-    if notes.strip() or event.get("artifacts"):
-        _append_scratchpad_entry(
-            state,
-            registry,
-            part_id=part_id,
-            notes=notes,
-            artifacts=event.get("artifacts"),
-        )
-    phase["history"].append(event)
+    _event, matched_part = _record_checkpoint_event(
+        state,
+        registry,
+        phase=phase,
+        task_id=task_id,
+        part_id=part_id,
+        notes=notes,
+        artifacts=artifacts,
+        report_markdown=None,
+        final_outcome=final_outcome,
+        action=action,
+        reason=reason,
+    )
     state["status"] = final_outcome
     state["continuation"] = {
         "current_state": f"Checkpoint recorded with outcome `{final_outcome}`.",
@@ -2026,6 +2041,205 @@ def checkpoint_task(
         "estimated_overhead": recommendation["overhead"]["coordination"],
         "observed_payoff": "unknown",
         "checkpoint_policy": matched_part.get("checkpoint_policy", "gate") if matched_part else "gate",
+    }
+    state_file, summary_file = save_task_state(state, registry)
+    payload["state_path"] = str(state_file)
+    payload["summary_path"] = str(summary_file)
+    return payload
+
+
+def _checkpoint_event_artifacts(artifacts: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not artifacts:
+        return None
+    return {
+        "findings": artifacts.get("findings", ""),
+        "files_discovered": artifacts.get("files_discovered", []),
+        "decisions": artifacts.get("decisions", ""),
+        "blockers": artifacts.get("blockers", []),
+    }
+
+
+def _record_checkpoint_event(
+    state: dict[str, Any],
+    registry: dict[str, Any],
+    *,
+    phase: dict[str, Any],
+    task_id: str,
+    part_id: str | None,
+    notes: str,
+    artifacts: dict[str, Any] | None,
+    report_markdown: str | None,
+    final_outcome: str,
+    action: str,
+    reason: str,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    event: dict[str, Any] = {
+        "at": now_iso(),
+        "notes": notes,
+        "recommended_outcome": final_outcome,
+        "recommended_action": action,
+        "change_reason": reason,
+    }
+    if part_id:
+        event["part_id"] = part_id
+    normalized_artifacts = _checkpoint_event_artifacts(artifacts)
+    if normalized_artifacts:
+        event["artifacts"] = normalized_artifacts
+    if report_markdown:
+        event["report_markdown"] = report_markdown
+
+    matched_part = None
+    if part_id:
+        matched_part = next(
+            (tp for tp in phase.get("task_parts", []) if tp.get("part_id") == part_id),
+            None,
+        )
+    if matched_part and matched_part.get("git_branch"):
+        git_branch = matched_part["git_branch"]
+        if git_branch:
+            repo_root = Path(state.get("project_root") or state.get("workspace_root") or ".")
+            diff = git_module.part_diff_stat(repo_root, task_id, part_id)
+            if diff:
+                event.setdefault("artifacts", {})["git_diff"] = diff
+
+    if notes.strip() or event.get("artifacts") or report_markdown:
+        _append_scratchpad_entry(
+            state,
+            registry,
+            part_id=part_id,
+            notes=notes,
+            artifacts=event.get("artifacts"),
+            report_markdown=report_markdown,
+        )
+    phase["history"].append(event)
+    return event, matched_part
+
+
+def _aggregate_phase_outcome(outcomes: list[str]) -> str:
+    precedence = [
+        "failed",
+        "abandoned",
+        "needs_reroute",
+        "blocked",
+        "ready_for_next_phase",
+        "on_track",
+    ]
+    for candidate in precedence:
+        if candidate in outcomes:
+            return candidate
+    return "on_track"
+
+
+def checkpoint_phase(
+    registry: dict[str, Any],
+    *,
+    root: Path,
+    task_id: str,
+    reports: list[dict[str, Any]],
+    phase_id: str | None = None,
+) -> dict[str, Any]:
+    state = load_task_state(task_id, root, registry)
+    recommendation = state.get("confirmed_plan") or state.get("recommendation")
+    if recommendation is None:
+        fail("task must be confirmed before checkpointing")
+    if not reports:
+        fail("checkpoint-phase requires at least one report")
+
+    target_phase_id = phase_id or state.get("current_phase_id")
+    phase = next((item for item in state.get("phases", []) if item.get("phase_id") == target_phase_id), None)
+    if phase is None:
+        fail("current phase is missing")
+
+    checkpoint_policies: dict[str, str] = {}
+    report_summaries: list[dict[str, Any]] = []
+    final_outcomes: list[str] = []
+    aggregate_notes: list[str] = []
+    for report in reports:
+        part_id = report.get("part_id")
+        if not part_id:
+            fail("each checkpoint-phase report requires part_id")
+        notes = (report.get("notes") or "").strip()
+        artifacts = report.get("artifacts")
+        report_markdown = report.get("report_markdown")
+        final_outcome = report.get("outcome") or infer_checkpoint_outcome(notes)
+        if final_outcome not in CHECKPOINT_OUTCOMES:
+            fail(f"invalid checkpoint outcome `{final_outcome}`")
+        action, reason = recommend_checkpoint_action(state, final_outcome, notes)
+        event, matched_part = _record_checkpoint_event(
+            state,
+            registry,
+            phase=phase,
+            task_id=task_id,
+            part_id=part_id,
+            notes=notes,
+            artifacts=artifacts,
+            report_markdown=report_markdown,
+            final_outcome=final_outcome,
+            action=action,
+            reason=reason,
+        )
+        final_outcomes.append(final_outcome)
+        aggregate_notes.append(notes)
+        if matched_part:
+            checkpoint_policies[part_id] = matched_part.get("checkpoint_policy", "gate")
+        report_summaries.append(
+            {
+                "part_id": part_id,
+                "recommended_outcome": final_outcome,
+                "recommended_action": action,
+                "change_reason": reason,
+                "checkpoint_policy": checkpoint_policies.get(part_id, "gate"),
+                "notes": notes,
+                "artifact_keys": sorted((artifacts or {}).keys()),
+                "has_report_markdown": bool(report_markdown),
+                "recorded_at": event.get("at"),
+            }
+        )
+
+    aggregate_outcome = _aggregate_phase_outcome(final_outcomes)
+    aggregate_action, aggregate_reason = recommend_checkpoint_action(
+        state,
+        aggregate_outcome,
+        "\n".join(note for note in aggregate_notes if note),
+    )
+    phase["history"].append(
+        {
+            "at": now_iso(),
+            "notes": "\n".join(note for note in aggregate_notes if note),
+            "recommended_outcome": aggregate_outcome,
+            "recommended_action": aggregate_action,
+            "change_reason": aggregate_reason,
+            "phase_checkpoint": True,
+            "report_count": len(report_summaries),
+            "part_ids": [item["part_id"] for item in report_summaries],
+        }
+    )
+    state["status"] = aggregate_outcome
+    state["continuation"] = {
+        "current_state": f"Phase checkpoint recorded with outcome `{aggregate_outcome}`.",
+        "next_best_action": checkpoint_next_step(aggregate_action),
+        "optional_parallel_follow_up": optional_follow_up(aggregate_action),
+        "safe_stop_point": "Safe to stop now." if aggregate_outcome in {"blocked", "ready_for_next_phase", "failed", "abandoned"} else "Better to continue until the current phase has another concrete result.",
+        "resume_instructions": f"Run `relaykit.py resume-task --task-id {task_id}` to continue from the latest checkpoint.",
+    }
+    payload = {
+        "task_id": task_id,
+        "phase_id": target_phase_id,
+        "report_count": len(report_summaries),
+        "reports": report_summaries,
+        "recommended_outcome": aggregate_outcome,
+        "change_reason": aggregate_reason,
+        "current_state": state["continuation"]["current_state"],
+        "recommended_action": aggregate_action,
+        "next_best_action": state["continuation"]["next_best_action"],
+        "optional_parallel_follow_up": state["continuation"]["optional_parallel_follow_up"],
+        "safe_stop_point": state["continuation"]["safe_stop_point"],
+        "resume_instructions": state["continuation"]["resume_instructions"],
+        "apply_command": f"relaykit.py advance-task --task-id {task_id}",
+        "remaining_uncertainty": state.get("classification", {}).get("remaining_uncertainty", ""),
+        "estimated_overhead": recommendation["overhead"]["coordination"],
+        "observed_payoff": "unknown",
+        "checkpoint_policies": checkpoint_policies,
     }
     state_file, summary_file = save_task_state(state, registry)
     payload["state_path"] = str(state_file)
@@ -2376,7 +2590,7 @@ def show_task(
     task_id: str,
 ) -> dict[str, Any]:
     state = load_task_state(task_id, root, registry)
-    return {
+    payload = {
         "task_id": task_id,
         "status": state["status"],
         "task": state["task"],
@@ -2388,9 +2602,27 @@ def show_task(
         "latest_checkpoint": latest_checkpoint_event(state),
         "timeline": _build_timeline(state),
     }
+    phase = current_phase(state)
+    if phase is not None:
+        checkpointed_parts = _phase_checkpointed_parts(phase)
+        if len(checkpointed_parts) >= 2:
+            payload["consolidation_packet"] = {
+                "available": True,
+                "phase_id": phase["phase_id"],
+                "checkpointed_parts": checkpointed_parts,
+                "suggested_command": f"relaykit render-consolidation-packet --task-id {task_id}",
+            }
+    return payload
 
 
-def build_handoff_card(state: dict[str, Any], part: dict[str, Any]) -> dict[str, Any]:
+def build_handoff_card(
+    state: dict[str, Any],
+    part: dict[str, Any],
+    *,
+    verbosity: str = "compact",
+) -> dict[str, Any]:
+    if verbosity not in HANDOFF_VERBOSITIES:
+        fail(f"invalid handoff verbosity `{verbosity}`")
     assignment = part["assignment"]
     policy = part.get("checkpoint_policy", "gate")
     stop_condition = "Checkpoint when you reach a concrete result, blocker, or setup-change signal."
@@ -2407,7 +2639,33 @@ def build_handoff_card(state: dict[str, Any], part: dict[str, Any]) -> dict[str,
                 state["task_id"],
             )
         )
-    return {
+    execution_context = state.get("execution_context")
+    if verbosity == "verbose":
+        payload = {
+            "task_id": state["task_id"],
+            "phase_id": state.get("current_phase_id"),
+            "part_id": part["part_id"],
+            "part_name": part["name"],
+            "role": assignment["role"],
+            "host": assignment["host"],
+            "model": assignment["model"],
+            "workspace_root": state.get("workspace_root"),
+            "project_root": state.get("project_root"),
+            "goal": part["objective"],
+            "task_summary": task_summary_text(state),
+            "scope_boundaries": state["task"].get("scope_boundaries") or "Not set.",
+            "definition_of_done": state["task"].get("definition_of_done") or "Not set.",
+            "verification_target": state["task"].get("verification") or "Not set.",
+            "remaining_uncertainty": state["task"].get("remaining_uncertainty") or "None noted.",
+            "stop_condition": stop_condition,
+            "scratchpad_path": scratchpad,
+            "stack_components": deepcopy(part.get("stack_components", [])),
+        }
+        if execution_context and (execution_context.get("validated_commands") or execution_context.get("notes")):
+            payload["execution_context"] = deepcopy(execution_context)
+        return payload
+
+    payload = {
         "task_id": state["task_id"],
         "phase_id": state.get("current_phase_id"),
         "part_id": part["part_id"],
@@ -2415,18 +2673,31 @@ def build_handoff_card(state: dict[str, Any], part: dict[str, Any]) -> dict[str,
         "role": assignment["role"],
         "host": assignment["host"],
         "model": assignment["model"],
-        "workspace_root": state.get("workspace_root"),
-        "project_root": state.get("project_root"),
         "goal": part["objective"],
         "task_summary": task_summary_text(state),
-        "scope_boundaries": state["task"].get("scope_boundaries") or "Not set.",
-        "definition_of_done": state["task"].get("definition_of_done") or "Not set.",
-        "verification_target": state["task"].get("verification") or "Not set.",
-        "remaining_uncertainty": state["task"].get("remaining_uncertainty") or "None noted.",
         "stop_condition": stop_condition,
-        "scratchpad_path": scratchpad,
-        "stack_components": deepcopy(part.get("stack_components", [])),
+        "stack_ids": [
+            {"kind": item["kind"], "id": item["id"]}
+            for item in part.get("stack_components", [])
+        ],
     }
+    if state.get("project_root"):
+        payload["project_root"] = state["project_root"]
+    if state.get("workspace_root"):
+        payload["workspace_root"] = state["workspace_root"]
+    if state["task"].get("verification"):
+        payload["verification_target"] = state["task"]["verification"]
+    if state["task"].get("scope_boundaries"):
+        payload["scope_boundaries"] = state["task"]["scope_boundaries"]
+    if state["task"].get("definition_of_done"):
+        payload["definition_of_done"] = state["task"]["definition_of_done"]
+    if state["task"].get("remaining_uncertainty"):
+        payload["remaining_uncertainty"] = state["task"]["remaining_uncertainty"]
+    if scratchpad:
+        payload["scratchpad_path"] = scratchpad
+    if execution_context and (execution_context.get("validated_commands") or execution_context.get("notes")):
+        payload["execution_context"] = deepcopy(execution_context)
+    return payload
 
 
 def prepare_git(
@@ -2519,7 +2790,7 @@ def render_prior_context(state: dict[str, Any], current_part_id: str) -> list[st
     if scratchpad:
         lines.extend([
             f"Shared scratchpad: `{scratchpad}`",
-            "Read it for context from other task parts. Append your key findings before checkpointing.",
+            "Append key findings before checkpointing.",
             "",
         ])
 
@@ -2543,9 +2814,60 @@ def render_prior_context(state: dict[str, Any], current_part_id: str) -> list[st
     return lines
 
 
-def render_task_part_markdown(state: dict[str, Any], part: dict[str, Any]) -> str:
+def _compact_task_context_lines(state: dict[str, Any]) -> list[str]:
+    lines = [f"- Summary: {task_summary_text(state)}"]
+    optional_fields = (
+        ("scope_boundaries", "Scope boundaries"),
+        ("definition_of_done", "Definition of done"),
+        ("verification", "Verification"),
+        ("remaining_uncertainty", "Remaining uncertainty"),
+    )
+    for key, label in optional_fields:
+        value = state["task"].get(key)
+        if value:
+            lines.append(f"- {label}: {value}")
+    return lines
+
+
+def _report_markdown_excerpt(markdown: str, *, limit: int = 900) -> str:
+    text = (markdown or "").strip()
+    if not text:
+        return ""
+    blocks = [block.strip() for block in text.split("\n\n") if block.strip()]
+    if not blocks:
+        return ""
+    excerpt_blocks: list[str] = []
+    for block in blocks:
+        excerpt_blocks.append(block)
+        if len(excerpt_blocks) >= 2:
+            break
+    excerpt = "\n\n".join(excerpt_blocks)
+    if len(excerpt) <= limit:
+        return excerpt
+    return excerpt[: limit - 3].rstrip() + "..."
+
+
+def _tail_text_excerpt(text: str, *, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    tail = text[-limit:]
+    newline_index = tail.find("\n")
+    if newline_index != -1:
+        trimmed = tail[newline_index + 1 :].lstrip()
+        if trimmed:
+            return trimmed
+    return tail
+
+
+def render_task_part_markdown(
+    state: dict[str, Any],
+    part: dict[str, Any],
+    *,
+    verbosity: str = "compact",
+) -> str:
     assignment = part["assignment"]
-    handoff_card = build_handoff_card(state, part)
+    handoff_card = build_handoff_card(state, part, verbosity=verbosity)
+    execution_context = state.get("execution_context") or {}
     lines = [
         f"# RelayKit Task Part: {part['name']}",
         "",
@@ -2569,30 +2891,36 @@ def render_task_part_markdown(state: dict[str, Any], part: dict[str, Any]) -> st
         "gate": "gate (requires human approval)",
     }
     lines.append(f"- Checkpoint policy: `{policy_labels.get(policy, policy)}`")
-    lines.extend(
-        [
-            "",
-            "## Objective",
-            "",
-            part["objective"],
-            "",
-            "## Why This Assignment",
-            "",
-            part["reason"],
-            "",
-            "## Task Context",
-            "",
-            f"- Summary: {task_summary_text(state)}",
-            f"- Scope boundaries: {state['task'].get('scope_boundaries') or 'Not set.'}",
-            f"- Definition of done: {state['task'].get('definition_of_done') or 'Not set.'}",
-            f"- Verification: {state['task'].get('verification') or 'Not set.'}",
-            f"- Remaining uncertainty: {state['task'].get('remaining_uncertainty') or 'None noted.'}",
-            "",
-        ]
-    )
+    lines.extend(["", "## Objective", "", part["objective"], "", "## Why This Assignment", "", part["reason"], "", "## Task Context", ""])
+    if verbosity == "verbose":
+        lines.extend(
+            [
+                f"- Summary: {task_summary_text(state)}",
+                f"- Scope boundaries: {state['task'].get('scope_boundaries') or 'Not set.'}",
+                f"- Definition of done: {state['task'].get('definition_of_done') or 'Not set.'}",
+                f"- Verification: {state['task'].get('verification') or 'Not set.'}",
+                f"- Remaining uncertainty: {state['task'].get('remaining_uncertainty') or 'None noted.'}",
+                "",
+            ]
+        )
+    else:
+        lines.extend(_compact_task_context_lines(state))
+        lines.append("")
     prior_lines = render_prior_context(state, part["part_id"])
     if prior_lines:
         lines.extend(prior_lines)
+    if execution_context.get("validated_commands") or execution_context.get("notes"):
+        lines.extend(["## Validated Runtime Context", ""])
+        for item in execution_context.get("validated_commands", []):
+            description = item.get("description") or item.get("source") or "validated command"
+            lines.append(f"- {description}: `{item['command']}`")
+        notes = execution_context.get("notes") or []
+        if notes:
+            if execution_context.get("validated_commands"):
+                lines.append("")
+                lines.append("Validated notes:")
+            lines.extend([f"- {note}" for note in notes])
+        lines.append("")
     lines.extend(
         [
             "## Prompt Stack",
@@ -2600,33 +2928,53 @@ def render_task_part_markdown(state: dict[str, Any], part: dict[str, Any]) -> st
         ]
     )
     for component in part.get("stack_components", []):
-        lines.append(f"- `{component['kind']}` `{component['id']}` -> `{component['path']}`")
+        if verbosity == "verbose":
+            lines.append(f"- `{component['kind']}` `{component['id']}` -> `{component['path']}`")
+        else:
+            lines.append(f"- `{component['kind']}` `{component['id']}`")
+    lines.extend(["", "## Structured Handoff", ""])
+    if verbosity == "verbose":
+        lines.extend(
+            [
+                "Use this machine-readable handoff card to confirm the receiving host has the required task context before starting:",
+                "",
+                "```json",
+                json.dumps(handoff_card, indent=2),
+                "```",
+                "",
+                "## RelayKit Tools for This Phase",
+                "",
+                "During execution, use only these RelayKit tools:",
+                "",
+                "- `relaykit_checkpoint_task` — record progress, findings, or blockers",
+                "- `relaykit_show_task` — check current task state",
+                "- `relaykit_resume_task` — recover context if session is interrupted",
+                "",
+                "After completion, the orchestrator uses:",
+                "",
+                "- `relaykit_advance_task` — apply checkpoint action and move forward",
+                "- `relaykit_reflect_task` — record learnings when the task is done",
+                "",
+                "Other RelayKit tools (`setup`, `doctor`, `bootstrap_host`, etc.) are for initial configuration only.",
+                "",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "The machine-readable handoff card is attached separately in this payload.",
+                f"- Verify role=`{assignment['role']}`, host=`{assignment['host']}`, model=`{assignment['model']}`.",
+                f"- Stop condition: {handoff_card['stop_condition']}",
+                "",
+                "## RelayKit Tools for This Phase",
+                "",
+                "- Worker: `relaykit_checkpoint_task`, `relaykit_show_task`, `relaykit_resume_task`",
+                "- Orchestrator: `relaykit_advance_task`, `relaykit_reflect_task`",
+                "",
+            ]
+        )
     lines.extend(
         [
-            "",
-            "## Structured Handoff",
-            "",
-            "Use this machine-readable handoff card to confirm the receiving host has the required task context before starting:",
-            "",
-            "```json",
-            json.dumps(handoff_card, indent=2),
-            "```",
-            "",
-            "## RelayKit Tools for This Phase",
-            "",
-            "During execution, use only these RelayKit tools:",
-            "",
-            "- `relaykit_checkpoint_task` — record progress, findings, or blockers",
-            "- `relaykit_show_task` — check current task state",
-            "- `relaykit_resume_task` — recover context if session is interrupted",
-            "",
-            "After completion, the orchestrator uses:",
-            "",
-            "- `relaykit_advance_task` — apply checkpoint action and move forward",
-            "- `relaykit_reflect_task` — record learnings when the task is done",
-            "",
-            "Other RelayKit tools (`setup`, `doctor`, `bootstrap_host`, etc.) are for initial configuration only.",
-            "",
             "## Start Here",
             "",
             "Load the prompt stack in order, then execute only this task part against the current task context.",
@@ -2636,28 +2984,29 @@ def render_task_part_markdown(state: dict[str, Any], part: dict[str, Any]) -> st
     return "\n".join(lines) + "\n"
 
 
-def render_task_part(
-    registry: dict[str, Any],
+def _build_task_part_payload(
+    state: dict[str, Any],
+    part: dict[str, Any],
     *,
-    root: Path,
-    task_id: str,
-    part_id: str,
+    verbosity: str,
 ) -> dict[str, Any]:
-    state = load_task_state(task_id, root, registry)
-    plan = active_plan(state)
-    if plan is None:
-        fail("task has no recommendation or confirmed plan to render")
-    part = next((item for item in plan.get("task_parts", []) if item.get("part_id") == part_id), None)
-    if part is None:
-        fail(f"task part `{part_id}` is not present in the current plan")
-    markdown = render_task_part_markdown(state, part)
-    profile_dirname = registry["defaults"]["profile_dirname"]
-    sp = scratchpad_path(root, profile_dirname, task_id)
-    result: dict[str, Any] = {
-        "task_id": task_id,
+    markdown = render_task_part_markdown(state, part, verbosity=verbosity)
+    handoff_card = build_handoff_card(state, part, verbosity=verbosity)
+    sp = None
+    if state.get("storage_root"):
+        candidate = scratchpad_path(
+            Path(state["storage_root"]),
+            state.get("profile_dirname") or ".relaykit",
+            state["task_id"],
+        )
+        if candidate.exists():
+            sp = str(candidate)
+    return {
+        "task_id": state["task_id"],
         "phase_id": state.get("current_phase_id"),
-        "part_id": part_id,
+        "part_id": part["part_id"],
         "part": part,
+        "verbosity": verbosity,
         "markdown": markdown,
         "task_context": {
             "summary": task_summary_text(state),
@@ -2666,11 +3015,172 @@ def render_task_part(
             "verification": state["task"].get("verification"),
             "remaining_uncertainty": state["task"].get("remaining_uncertainty"),
         },
-        "scratchpad_path": str(sp) if sp.exists() else None,
-        "prior_artifacts": collect_prior_artifacts(state, part_id),
-        "handoff_card": build_handoff_card(state, part),
+        "scratchpad_path": sp,
+        "prior_artifacts": collect_prior_artifacts(state, part["part_id"]),
+        "handoff_card": handoff_card,
     }
-    return result
+
+
+def build_launch_bundle(
+    state: dict[str, Any],
+    task_parts: list[dict[str, Any]],
+    registry: dict[str, Any],
+    *,
+    verbosity: str = "compact",
+) -> list[dict[str, Any]]:
+    bundle: list[dict[str, Any]] = []
+    for part in task_parts:
+        rendered = _build_task_part_payload(state, part, verbosity=verbosity)
+        bundle.append(
+            {
+                "part_id": part["part_id"],
+                "checkpoint_policy": part.get("checkpoint_policy", "gate"),
+                "handoff_card": rendered["handoff_card"],
+                "markdown": rendered["markdown"],
+            }
+        )
+    return bundle
+
+
+def render_task_part(
+    registry: dict[str, Any],
+    *,
+    root: Path,
+    task_id: str,
+    part_id: str,
+    verbosity: str = "compact",
+) -> dict[str, Any]:
+    state = load_task_state(task_id, root, registry)
+    plan = active_plan(state)
+    if plan is None:
+        fail("task has no recommendation or confirmed plan to render")
+    part = next((item for item in plan.get("task_parts", []) if item.get("part_id") == part_id), None)
+    if part is None:
+        fail(f"task part `{part_id}` is not present in the current plan")
+    return _build_task_part_payload(state, part, verbosity=verbosity)
+
+
+def render_consolidation_packet(
+    registry: dict[str, Any],
+    *,
+    root: Path,
+    task_id: str,
+    phase_id: str | None = None,
+    verbosity: str = "compact",
+) -> dict[str, Any]:
+    if verbosity not in HANDOFF_VERBOSITIES:
+        fail(f"invalid consolidation verbosity `{verbosity}`")
+    state = load_task_state(task_id, root, registry)
+    phase = current_phase(state) if phase_id is None else next(
+        (item for item in state.get("phases", []) if item.get("phase_id") == phase_id),
+        None,
+    )
+    if phase is None:
+        fail("phase is missing")
+
+    latest_by_part: dict[str, dict[str, Any]] = {}
+    for event in phase.get("history", []):
+        part_id = event.get("part_id")
+        if part_id:
+            latest_by_part[part_id] = event
+    reports: list[dict[str, Any]] = []
+    policy_by_part = {
+        item.get("part_id"): item.get("checkpoint_policy", "gate")
+        for item in phase.get("task_parts", [])
+    }
+    ordered_part_ids = [
+        item.get("part_id")
+        for item in phase.get("task_parts", [])
+        if item.get("part_id") in latest_by_part
+    ]
+    ordered_part_ids.extend(
+        part_id for part_id in latest_by_part if part_id not in ordered_part_ids
+    )
+    for part_id in ordered_part_ids:
+        event = latest_by_part[part_id]
+        reports.append(
+            {
+                "part_id": part_id,
+                "recommended_outcome": event.get("recommended_outcome"),
+                "recommended_action": event.get("recommended_action"),
+                "change_reason": event.get("change_reason"),
+                "notes": event.get("notes"),
+                "artifacts": deepcopy(event.get("artifacts", {})),
+                "report_markdown": event.get("report_markdown"),
+                "checkpoint_policy": policy_by_part.get(part_id, "gate"),
+            }
+        )
+    scratchpad_text = ""
+    profile_dirname = registry["defaults"]["profile_dirname"]
+    sp = scratchpad_path(root, profile_dirname, task_id)
+    if sp.exists():
+        scratchpad_text = sp.read_text(encoding="utf-8")
+    scratchpad_limit = 4000 if verbosity == "verbose" else 1200
+    scratchpad_excerpt = _tail_text_excerpt(scratchpad_text, limit=scratchpad_limit)
+
+    lines = [
+        "# RelayKit Consolidation Packet",
+        "",
+        f"- Task id: `{task_id}`",
+        f"- Phase: `{phase['phase_id']}`",
+        f"- Task status: `{state.get('status')}`",
+        f"- Setup: `{phase.get('setup', {}).get('coordination', 'unknown')} + {phase.get('setup', {}).get('continuity', 'unknown')}`",
+        "",
+        "## Phase Summary",
+        "",
+        f"- Task summary: {task_summary_text(state)}",
+        f"- Latest checkpointed parts: {', '.join(f'`{item['part_id']}`' for item in reports) if reports else 'None yet.'}",
+        "",
+    ]
+    if scratchpad_excerpt:
+        lines.extend(["## Scratchpad Excerpt", "", scratchpad_excerpt, ""])
+    lines.extend(["## Latest Per-Part Reports", ""])
+    for report in reports:
+        lines.append(f"### `{report['part_id']}`")
+        lines.append("")
+        lines.append(f"- Outcome: `{report.get('recommended_outcome') or 'unknown'}`")
+        lines.append(f"- Action: `{report.get('recommended_action') or 'unknown'}`")
+        lines.append(f"- Checkpoint policy: `{report.get('checkpoint_policy') or 'gate'}`")
+        if report.get("notes"):
+            lines.extend(["", report["notes"], ""])
+        if report.get("report_markdown"):
+            if verbosity == "verbose":
+                lines.extend(["#### Report", "", report["report_markdown"], ""])
+            else:
+                lines.extend(
+                    [
+                        "#### Report Summary",
+                        "",
+                        _report_markdown_excerpt(report["report_markdown"]),
+                        "",
+                    ]
+                )
+        artifacts = report.get("artifacts") or {}
+        if verbosity == "verbose" and artifacts:
+            lines.extend(["#### Artifacts", "", "```json", json.dumps(artifacts, indent=2), "```", ""])
+    lines.extend(
+        [
+            "## Consolidation Objective",
+            "",
+            "Synthesize the latest per-part results into one agreed recommendation, one required change set, one verification gate, and any remaining open risks.",
+            "",
+        ]
+    )
+    markdown = "\n".join(lines).strip() + "\n"
+    return {
+        "task_id": task_id,
+        "phase_id": phase["phase_id"],
+        "verbosity": verbosity,
+        "phase_summary": {
+            "status": state.get("status"),
+            "setup": deepcopy(phase.get("setup", {})),
+            "task_summary": task_summary_text(state),
+        },
+        "reports": reports,
+        "scratchpad_path": str(sp) if sp.exists() else None,
+        "scratchpad_excerpt": scratchpad_excerpt or None,
+        "markdown": markdown,
+    }
 
 
 def reflect_task(

@@ -118,133 +118,29 @@ def resolve_task_context(
 
 
 def build_doctor_payload(arguments: dict[str, Any]) -> dict[str, Any]:
-    registry = relaykit.load_registry()
-    registry_issues = relaykit.validate_registry(registry)
-
-    workspace_root = Path(arguments.get("workspace_root", ".")).resolve()
-    workspace_candidate = (
-        Path(arguments["workspace_profile"]).resolve()
-        if arguments.get("workspace_profile")
-        else relaykit.workspace_profile_path(workspace_root, registry)
+    return relaykit.build_doctor_payload(
+        workspace_root=Path(arguments.get("workspace_root", ".")).resolve(),
+        project_root=Path(arguments["project_root"]).resolve() if arguments.get("project_root") else None,
+        workspace_profile_override=Path(arguments["workspace_profile"]).resolve() if arguments.get("workspace_profile") else None,
+        project_profile_override=Path(arguments["project_profile"]).resolve() if arguments.get("project_profile") else None,
+        requested_hosts=arguments.get("host"),
+        current_host=bool(arguments.get("current_host")),
     )
-    workspace_path, workspace_profile = relaykit.load_optional_profile(
-        workspace_candidate,
-        relaykit.PROFILE_KIND_WORKSPACE,
-    )
-    workspace_issues = (
-        ["workspace profile is missing; run RelayKit workspace onboarding"]
-        if workspace_profile is None
-        else relaykit.validate_profile(
-            workspace_profile,
-            registry,
-            expected_kind=relaykit.PROFILE_KIND_WORKSPACE,
-            base_preset=relaykit.registry_defaults(registry)["default_preset"],
-            origin="workspace profile",
-        )
-    )
-
-    project_payload = relaykit.status_payload(None, [], optional=True)
-    if arguments.get("project_root") or arguments.get("project_profile"):
-        project_root = Path(arguments.get("project_root", ".")).resolve()
-        project_candidate = (
-            Path(arguments["project_profile"]).resolve()
-            if arguments.get("project_profile")
-            else relaykit.project_profile_path(project_root, registry)
-        )
-        project_path, project_profile = relaykit.load_optional_profile(
-            project_candidate,
-            relaykit.PROFILE_KIND_PROJECT,
-        )
-        project_issues = (
-            []
-            if project_profile is None
-            else relaykit.validate_profile(
-                project_profile,
-                registry,
-                expected_kind=relaykit.PROFILE_KIND_PROJECT,
-                base_preset=relaykit.project_base_preset(
-                    registry,
-                    workspace_profile=workspace_profile,
-                    project_profile=project_profile,
-                ),
-                origin="project profile",
-            )
-        )
-        project_payload = relaykit.status_payload(project_path, project_issues, optional=True)
-
-    next_actions: list[str] = []
-    guided_setup = None
-    if workspace_profile is None:
-        next_actions.append(
-            f"relaykit init-workspace --workspace-root {workspace_root}"
-        )
-        all_hosts = sorted(registry.get("hosts", {}).keys())
-        all_presets = sorted(registry.get("presets", {}).keys())
-        guided_setup = {
-            "message": "No workspace profile found. Answer these 3 questions to create one:",
-            "questions": [
-                {
-                    "id": "available_hosts",
-                    "prompt": f"Which AI coding tools do you have available? Options: {', '.join(all_hosts)}",
-                    "type": "multi_select",
-                    "options": all_hosts,
-                },
-                {
-                    "id": "preset",
-                    "prompt": f"What's your default working style? Options: {', '.join(all_presets)}",
-                    "type": "single_select",
-                    "options": all_presets,
-                    "default": registry.get("defaults", {}).get("default_preset", "balanced-default"),
-                },
-                {
-                    "id": "git_integration",
-                    "prompt": "Enable git branch-per-task-part isolation? (recommended for team repos, optional for solo work)",
-                    "type": "boolean",
-                    "default": False,
-                },
-            ],
-            "apply_tool": "relaykit_guided_setup",
-            "apply_arguments": {
-                "workspace_root": str(workspace_root),
-                "preset": registry.get("defaults", {}).get("default_preset", "balanced-default"),
-                "git_integration": False,
-            },
-            "apply_command": f"relaykit guided-setup --workspace-root {workspace_root}",
-        }
-    if arguments.get("project_root") and project_payload["status"] == "missing":
-        next_actions.append(
-            "relaykit init-project "
-            f"--project-root {Path(arguments['project_root']).resolve()} --use-workspace-defaults"
-        )
-    payload = {
-        "product": "RelayKit",
-        "registry": {
-            "status": "ok" if not registry_issues else "invalid",
-            "path": str(relaykit.REGISTRY_PATH),
-            "issues": registry_issues,
-        },
-        "workspace_profile": relaykit.status_payload(workspace_path, workspace_issues, optional=False),
-        "project_profile": project_payload,
-        "schemas": {
-            "workspace_profile": str((relaykit.SCHEMA_ROOT / "workspace-profile.schema.json").resolve()),
-            "project_profile": str((relaykit.SCHEMA_ROOT / "project-profile.schema.json").resolve()),
-        },
-        "persona_layer": relaykit.persona_layer_summary(registry),
-        "next_actions": next_actions,
-    }
-    if guided_setup:
-        payload["guided_setup"] = guided_setup
-    if arguments.get("host") or arguments.get("current_host"):
-        hosts = relaykit.onboarding_hosts(arguments.get("host"), current_host=bool(arguments.get("current_host")))
-        payload["host_onboarding"] = {
-            "server": relaykit.mcp_server_spec(),
-            "hosts": [relaykit.host_onboarding_status(host_name) for host_name in hosts],
-        }
-    return payload
 
 
 def tool_doctor(arguments: dict[str, Any]) -> dict[str, Any]:
     payload = build_doctor_payload(arguments)
+    execution_context_paths = relaykit.persist_execution_context(
+        relaykit.load_registry(),
+        workspace_root=Path(arguments.get("workspace_root", ".")).resolve(),
+        project_root=Path(arguments["project_root"]).resolve() if arguments.get("project_root") else None,
+        payload=relaykit.doctor_execution_context_payload(
+            workspace_root=Path(arguments.get("workspace_root", ".")).resolve(),
+            project_root=Path(arguments["project_root"]).resolve() if arguments.get("project_root") else None,
+        ),
+    )
+    if execution_context_paths:
+        payload["execution_context_paths"] = execution_context_paths
     return make_text_result(json_text(payload), structured=payload)
 
 
@@ -577,6 +473,11 @@ def tool_start_task(arguments: dict[str, Any]) -> dict[str, Any]:
         registry,
         arguments,
     )
+    execution_context = relaykit.load_task_execution_context(
+        registry,
+        workspace_root=workspace_root,
+        project_root=project_root,
+    )
     payload = taskflow.start_task(
         registry,
         workspace_root=workspace_root,
@@ -588,6 +489,7 @@ def tool_start_task(arguments: dict[str, Any]) -> dict[str, Any]:
         allowed_hosts=arguments.get("allowed_hosts"),
         skip_clarification=bool(arguments.get("skip_clarification", False)),
         dry_run=bool(arguments.get("dry_run", False)),
+        execution_context=execution_context,
     )
     return make_text_result(json_text(payload), structured=payload)
 
@@ -696,6 +598,28 @@ def tool_checkpoint_task(arguments: dict[str, Any]) -> dict[str, Any]:
     return make_text_result(json_text(payload), structured=payload)
 
 
+def tool_checkpoint_phase(arguments: dict[str, Any]) -> dict[str, Any]:
+    registry = validate_registry_or_fail()
+    _workspace_root, _workspace_profile, _project_root, _project_profile, storage_root = resolve_task_context(
+        registry,
+        arguments,
+    )
+    task_id = arguments.get("task_id")
+    if not task_id:
+        raise ValueError("task_id is required")
+    reports = arguments.get("reports")
+    if not isinstance(reports, list):
+        raise ValueError("reports must be an array")
+    payload = taskflow.checkpoint_phase(
+        registry,
+        root=storage_root,
+        task_id=task_id,
+        phase_id=arguments.get("phase_id"),
+        reports=reports,
+    )
+    return make_text_result(json_text(payload), structured=payload)
+
+
 def tool_prepare_git(arguments: dict[str, Any]) -> dict[str, Any]:
     registry = validate_registry_or_fail()
     _workspace_root, workspace_profile, _project_root, project_profile, storage_root = resolve_task_context(
@@ -773,6 +697,26 @@ def tool_render_task_part(arguments: dict[str, Any]) -> dict[str, Any]:
         root=storage_root,
         task_id=task_id,
         part_id=part_id,
+        verbosity=arguments.get("verbosity", "compact"),
+    )
+    return make_text_result(payload["markdown"], structured=payload)
+
+
+def tool_render_consolidation_packet(arguments: dict[str, Any]) -> dict[str, Any]:
+    registry = validate_registry_or_fail()
+    _workspace_root, _workspace_profile, _project_root, _project_profile, storage_root = resolve_task_context(
+        registry,
+        arguments,
+    )
+    task_id = arguments.get("task_id")
+    if not task_id:
+        raise ValueError("task_id is required")
+    payload = taskflow.render_consolidation_packet(
+        registry,
+        root=storage_root,
+        task_id=task_id,
+        phase_id=arguments.get("phase_id"),
+        verbosity=arguments.get("verbosity", "compact"),
     )
     return make_text_result(payload["markdown"], structured=payload)
 
@@ -1156,7 +1100,7 @@ TOOLS: dict[str, dict[str, Any]] = {
         "handler": tool_list_tasks,
     },
     "relaykit_confirm_task": {
-        "description": "Accept a RelayKit setup recommendation or request changes after clarification is complete.",
+        "description": "Accept a RelayKit setup recommendation or request changes after clarification is complete. Lean-path confirmations include bundled launch packets for the current task parts.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -1212,6 +1156,48 @@ TOOLS: dict[str, dict[str, Any]] = {
             "additionalProperties": False
         },
         "handler": tool_checkpoint_task,
+    },
+    "relaykit_checkpoint_phase": {
+        "description": "Record a batch checkpoint for multiple task parts in the current phase and get one aggregated next action.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "workspace_root": {"type": "string"},
+                "project_root": {"type": "string"},
+                "workspace_profile": {"type": "string"},
+                "project_profile": {"type": "string"},
+                "task_scope": {"type": "string", "enum": ["workspace", "project"]},
+                "task_id": {"type": "string"},
+                "phase_id": {"type": "string"},
+                "reports": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "part_id": {"type": "string"},
+                            "outcome": {"type": "string", "enum": sorted(taskflow.CHECKPOINT_OUTCOMES)},
+                            "notes": {"type": "string"},
+                            "artifacts": {
+                                "type": "object",
+                                "properties": {
+                                    "findings": {"type": "string"},
+                                    "files_discovered": {"type": "array", "items": {"type": "string"}},
+                                    "decisions": {"type": "string"},
+                                    "blockers": {"type": "array", "items": {"type": "string"}}
+                                },
+                                "additionalProperties": False
+                            },
+                            "report_markdown": {"type": "string"}
+                        },
+                        "required": ["part_id", "notes"],
+                        "additionalProperties": False
+                    }
+                }
+            },
+            "required": ["task_id", "reports"],
+            "additionalProperties": False
+        },
+        "handler": tool_checkpoint_phase,
     },
     "relaykit_prepare_git": {
         "description": "Prepare explicit git branches for the current task parts after user confirmation. This is optional and never runs automatically.",
@@ -1280,12 +1266,32 @@ TOOLS: dict[str, dict[str, Any]] = {
                 "project_profile": {"type": "string"},
                 "task_scope": {"type": "string", "enum": ["workspace", "project"]},
                 "task_id": {"type": "string"},
-                "part_id": {"type": "string"}
+                "part_id": {"type": "string"},
+                "verbosity": {"type": "string", "enum": sorted(taskflow.HANDOFF_VERBOSITIES)}
             },
             "required": ["task_id", "part_id"],
             "additionalProperties": False
         },
         "handler": tool_render_task_part,
+    },
+    "relaykit_render_consolidation_packet": {
+        "description": "Render a generated consolidation packet for the current or requested phase so a consolidator host can synthesize the latest task-part outputs.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "workspace_root": {"type": "string"},
+                "project_root": {"type": "string"},
+                "workspace_profile": {"type": "string"},
+                "project_profile": {"type": "string"},
+                "task_scope": {"type": "string", "enum": ["workspace", "project"]},
+                "task_id": {"type": "string"},
+                "phase_id": {"type": "string"},
+                "verbosity": {"type": "string", "enum": sorted(taskflow.HANDOFF_VERBOSITIES)}
+            },
+            "required": ["task_id"],
+            "additionalProperties": False
+        },
+        "handler": tool_render_consolidation_packet,
     },
     "relaykit_reflect_task": {
         "description": "Record a post-task reflection so RelayKit can learn from overhead and tool fit after the task is done.",

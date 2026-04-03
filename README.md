@@ -143,6 +143,8 @@ Confirm and execute:
 relaykit confirm-task --workspace-root . --task-id <id> --accept
 ```
 
+For small bounded coordinated tasks, RelayKit now defaults to `coordinated+lean`. In that path, `confirm-task` returns a `launch_bundle` immediately with compact handoff cards and compact launch markdown, so you usually do not need separate `render-task-part` calls unless you want a verbose packet or need to re-render later.
+
 Checkpoint, resume, and reflect when done:
 
 ```bash
@@ -150,6 +152,15 @@ relaykit checkpoint-task --workspace-root . --task-id <id> --notes "Header done,
 relaykit resume-task --workspace-root . --task-id <id>
 relaykit reflect-task --workspace-root . --task-id <id> --split-worth-it yes --tool-fit good
 ```
+
+For lean coordinated phases, prefer the batched path:
+
+```bash
+relaykit checkpoint-phase --workspace-root . --task-id <id> --reports '[{"part_id":"implementation","notes":"builder ready"},{"part_id":"critique","notes":"critic agrees"}]'
+relaykit render-consolidation-packet --workspace-root . --task-id <id>
+```
+
+The compact consolidation packet keeps the full per-part reports in the structured payload while summarizing them in the markdown handoff by default. Use `--verbosity verbose` when you want the full inline report text.
 
 ## Workspace Setup
 
