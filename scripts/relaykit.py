@@ -2149,9 +2149,10 @@ def command_init_workspace(args: argparse.Namespace) -> int:
     workspace_root = Path(args.workspace_root).resolve()
     path = workspace_profile_path(workspace_root, registry)
     ensure_profile_write(path, args.force)
+    non_interactive_defaults = not sys.stdin.isatty()
     profile = (
         default_workspace_profile(registry)
-        if args.start_with_defaults
+        if args.start_with_defaults or non_interactive_defaults
         else interactive_workspace_profile(registry)
     )
     profile_issues = validate_profile(

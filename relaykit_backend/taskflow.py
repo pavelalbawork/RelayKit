@@ -216,6 +216,44 @@ def _create_scratchpad(state: dict[str, Any], registry: dict[str, Any]) -> Path:
     return path
 
 
+def _append_scratchpad_entry(
+    state: dict[str, Any],
+    registry: dict[str, Any],
+    *,
+    part_id: str | None,
+    notes: str,
+    artifacts: dict[str, Any] | None,
+) -> Path:
+    path = _create_scratchpad(state, registry)
+    timestamp = now_iso()
+    lines = [
+        f"## {timestamp} — `{part_id or 'task'}`",
+        "",
+    ]
+    if notes.strip():
+        lines.extend([f"Notes: {notes.strip()}", ""])
+    if artifacts:
+        findings = artifacts.get("findings") or ""
+        decisions = artifacts.get("decisions") or ""
+        files_discovered = artifacts.get("files_discovered") or []
+        blockers = artifacts.get("blockers") or []
+        git_diff = artifacts.get("git_diff")
+        if findings:
+            lines.extend([f"Findings: {findings}", ""])
+        if decisions:
+            lines.extend([f"Decisions: {decisions}", ""])
+        if files_discovered:
+            lines.extend(["Files discovered:", *[f"- `{item}`" for item in files_discovered], ""])
+        if blockers:
+            lines.extend(["Blockers:", *[f"- {item}" for item in blockers], ""])
+        if git_diff:
+            stat = git_diff.get("stat") or ""
+            if stat:
+                lines.extend(["Git diff:", "```text", stat, "```", ""])
+    path.write_text(path.read_text(encoding="utf-8") + "\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
 def learning_log_path(root: Path, profile_dirname: str) -> Path:
     return root / profile_dirname / LEARNING_LOG_FILENAME
 
@@ -1553,6 +1591,7 @@ def start_task(
     state = {
         "version": TASKFLOW_VERSION,
         "task_id": task_id,
+        "profile_dirname": registry["defaults"]["profile_dirname"],
         "status": "clarifying",
         "created_at": now_iso(),
         "updated_at": now_iso(),
@@ -1868,6 +1907,14 @@ def checkpoint_task(
             diff = git_module.part_diff_stat(repo_root, task_id, part_id)
             if diff:
                 event.setdefault("artifacts", {})["git_diff"] = diff
+    if notes.strip() or event.get("artifacts"):
+        _append_scratchpad_entry(
+            state,
+            registry,
+            part_id=part_id,
+            notes=notes,
+            artifacts=event.get("artifacts"),
+        )
     phase["history"].append(event)
     state["status"] = final_outcome
     state["continuation"] = {
@@ -2280,22 +2327,30 @@ def prepare_git(
     if not git_module.is_git_repo(repo_root):
         fail(f"`{repo_root}` is not inside a git working tree")
     base = git_module.current_branch(repo_root)
-    branches: list[dict[str, str]] = []
+    planned: list[dict[str, str]] = []
+    created_branches: list[dict[str, str]] = []
+    failed_branches: list[dict[str, str]] = []
     for part in phase.get("task_parts", []):
         branch = git_module.part_branch_name(task_id, part["part_id"])
-        branches.append({"part_id": part["part_id"], "branch": branch})
+        planned.append({"part_id": part["part_id"], "branch": branch})
         if not dry_run:
             created = git_module.create_part_branch(repo_root, task_id, part["part_id"], base)
             if created:
                 part["git_branch"] = created
+                created_branches.append({"part_id": part["part_id"], "branch": created})
+            else:
+                failed_branches.append({"part_id": part["part_id"], "branch": branch})
     payload = {
         "task_id": task_id,
-        "stage": "git_prepared" if not dry_run else "git_preview",
+        "stage": "git_prepared" if not dry_run and not failed_branches else ("git_prepared_partial" if not dry_run else "git_preview"),
         "dry_run": dry_run,
         "repo_root": str(repo_root),
         "base_branch": base,
-        "git_branches": branches,
+        "git_branches": planned if dry_run else created_branches,
     }
+    if not dry_run:
+        payload["git_branches_created"] = created_branches
+        payload["git_branches_failed"] = failed_branches
     if not dry_run:
         state_file, summary_file = save_task_state(state, registry)
         payload["state_path"] = str(state_file)
@@ -2327,7 +2382,11 @@ def render_prior_context(state: dict[str, Any], current_part_id: str) -> list[st
     scratchpad = None
     storage_root = state.get("storage_root")
     if storage_root:
-        candidate = Path(storage_root) / ".relaykit" / "tasks" / state["task_id"] / "scratchpad.md"
+        candidate = scratchpad_path(
+            Path(storage_root),
+            state.get("profile_dirname") or ".relaykit",
+            state["task_id"],
+        )
         if candidate.exists():
             scratchpad = str(candidate)
 
