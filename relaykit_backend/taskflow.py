@@ -32,6 +32,8 @@ CHANGE_REASONS = {"stage_change", "setup_underperformed", "new_information", "sc
 REFLECTION_VALUES = {"yes", "no", "mixed", "unknown"}
 TOOL_FIT_VALUES = {"good", "bad", "mixed", "unknown"}
 HANDOFF_VERBOSITIES = {"compact", "verbose"}
+RESUME_VERBOSITIES = {"compact", "verbose"}
+RESULT_VERBOSITIES = {"compact", "verbose"}
 TOOL_COST = {
     "gpt-5.4": "high",
     "gpt-5.4-mini": "low",
@@ -463,6 +465,69 @@ def task_summary_text(state: dict[str, Any]) -> str:
     return state["task"]["original"]
 
 
+def _compact_display_path(path: str | None, state: dict[str, Any]) -> str | None:
+    if not path:
+        return None
+    candidate = Path(path)
+    for root_key in ("project_root", "workspace_root"):
+        root = state.get(root_key)
+        if not root:
+            continue
+        try:
+            relative = candidate.relative_to(Path(root))
+        except ValueError:
+            continue
+        return str(relative)
+    return str(candidate)
+
+
+def _compact_execution_note(execution_context: dict[str, Any]) -> str | None:
+    notes = execution_context.get("notes") or []
+    if not notes:
+        return None
+    note = str(notes[0]).strip()
+    if not note:
+        return None
+    command_sources = {
+        str(item.get("source") or "").strip()
+        for item in execution_context.get("validated_commands", [])
+        if isinstance(item, dict)
+    }
+    if "verification-fallback" in command_sources and "is not runnable here:" in note:
+        return "Declared verification target is unavailable locally; use the validated fallback."
+    if "Fell back to `" in note and "declared project verification target" in note:
+        return "Using a validated local fallback because the declared verification target is unavailable."
+    if len(note) > 120:
+        return note[:117].rstrip() + "..."
+    return note
+
+
+def _compact_execution_context(execution_context: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not execution_context:
+        return None
+    commands: list[dict[str, str]] = []
+    for item in execution_context.get("validated_commands", []):
+        if not isinstance(item, dict):
+            continue
+        command = str(item.get("command") or "").strip()
+        if not command:
+            continue
+        compact_item = {"command": command}
+        source = str(item.get("source") or "").strip()
+        if source:
+            compact_item["source"] = source
+        commands.append(compact_item)
+    note = _compact_execution_note(execution_context)
+    if not commands and not note:
+        return None
+    payload: dict[str, Any] = {}
+    if commands:
+        payload["validated_commands"] = commands
+    if note:
+        payload["note"] = note
+    return payload
+
+
 def classify_task(state: dict[str, Any], registry: dict[str, Any]) -> dict[str, Any]:
     text = " ".join(
         [
@@ -794,8 +859,10 @@ def choose_task_parts(
     *,
     coordination: str,
     continuity: str,
+    force_research: bool = False,
 ) -> list[dict[str, Any]]:
     flags = classification["flags"]
+    research_required = flags["research"] or force_research
     task_type = classification["task_type"]
     if task_type == "review-only":
         return [
@@ -808,7 +875,7 @@ def choose_task_parts(
                 "lane_hint": "reviewer" if coordination == "coordinated" else "critic",
             }
         ]
-    if flags["research"] and not flags["implementation"]:
+    if research_required and not flags["implementation"]:
         return [
             {
                 "part_id": "research",
@@ -855,7 +922,7 @@ def choose_task_parts(
             }
         )
         if coordination == "coordinated":
-            if flags["research"] and continuity == "full":
+            if research_required and continuity == "full":
                 parts.append(
                     {
                         "part_id": "research",
@@ -1050,6 +1117,22 @@ def _default_checkpoint_policy(role: str) -> str:
     return "notify"
 
 
+def _change_requests_research(change_text: str) -> bool:
+    lowered = change_text.lower()
+    if re.search(r"\b(no research|without research|skip research)\b", lowered):
+        return False
+    targeted_patterns = (
+        r"\bresearch(?:-|\s)?first\b",
+        r"\bneed(?:s)? research\b",
+        r"\bresearch before\b",
+        r"\bbefore (?:implementation|coding|execution)\b",
+        r"\bgather evidence\b",
+        r"\bmore evidence\b",
+        r"\bvalidate assumptions\b",
+    )
+    return any(re.search(pattern, lowered) for pattern in targeted_patterns)
+
+
 def setup_recommendation(
     state: dict[str, Any],
     registry: dict[str, Any],
@@ -1058,6 +1141,9 @@ def setup_recommendation(
 ) -> dict[str, Any]:
     classification = classify_task(state, registry)
     defaults = state["layers"]["defaults"]
+    manual_setup = state.get("manual_overrides", {})
+    force_research = bool(manual_setup.get("force_research"))
+    research_required = classification["flags"]["research"] or force_research
     preset_name = select_internal_preset(registry, classification, state["inventory"], defaults)
     lanes = resolve_effective_lanes(
         registry,
@@ -1070,7 +1156,7 @@ def setup_recommendation(
     complexity = 0
     complexity += 1 if flags["implementation"] else 0
     complexity += 1 if flags["review"] else 0
-    complexity += 1 if flags["research"] else 0
+    complexity += 1 if research_required else 0
     complexity += 1 if flags["frontend"] else 0
     complexity += 1 if flags["cross_project"] else 0
     complexity += 1 if flags["pause_sensitive"] else 0
@@ -1081,13 +1167,13 @@ def setup_recommendation(
         coordination = "coordinated"
     elif flags["implementation"] and flags["review"]:
         coordination = "coordinated"
-    elif flags["research"] and flags["implementation"] and complexity >= 3:
+    elif research_required and flags["implementation"] and complexity >= 3:
         coordination = "coordinated"
     elif complexity >= 4:
         coordination = "coordinated"
 
     continuity = "lean"
-    if flags["research"] or flags["pause_sensitive"] or flags["cross_project"]:
+    if research_required or flags["pause_sensitive"] or flags["cross_project"]:
         continuity = "full"
     elif complexity >= 5:
         continuity = "full"
@@ -1108,18 +1194,22 @@ def setup_recommendation(
     if applied_learned_setup and learned_continuity in {"lean", "full"}:
         continuity = learned_continuity
 
-    manual_setup = state.get("manual_overrides", {})
     if manual_setup.get("coordination") in {"solo", "coordinated"}:
         coordination = manual_setup["coordination"]
     if manual_setup.get("continuity") in {"lean", "full"}:
         continuity = manual_setup["continuity"]
 
-    parts = choose_task_parts(classification, coordination=coordination, continuity=continuity)
+    parts = choose_task_parts(
+        classification,
+        coordination=coordination,
+        continuity=continuity,
+        force_research=force_research,
+    )
     manual_full_requested = manual_setup.get("continuity") == "full"
     bounded_coordinated = (
         coordination == "coordinated"
         and len(parts) == 2
-        and not flags["research"]
+        and not research_required
         and not flags["frontend"]
         and not flags["cross_project"]
         and not flags["pause_sensitive"]
@@ -1127,11 +1217,21 @@ def setup_recommendation(
     )
     if len(parts) > 2 and continuity != "full":
         continuity = "full"
-        parts = choose_task_parts(classification, coordination=coordination, continuity=continuity)
+        parts = choose_task_parts(
+            classification,
+            coordination=coordination,
+            continuity=continuity,
+            force_research=force_research,
+        )
         bounded_coordinated = False
     elif bounded_coordinated and continuity == "full" and not manual_full_requested:
         continuity = "lean"
-        parts = choose_task_parts(classification, coordination=coordination, continuity=continuity)
+        parts = choose_task_parts(
+            classification,
+            coordination=coordination,
+            continuity=continuity,
+            force_research=force_research,
+        )
 
     assigned_parts: list[dict[str, Any]] = []
     selected_hosts: list[str] = []
@@ -1827,6 +1927,12 @@ def apply_change_request(
         state["manual_overrides"]["continuity"] = "lean"
     if re.search(r"\bfull\b", lowered):
         state["manual_overrides"]["continuity"] = "full"
+    if _change_requests_research(change_text):
+        state["manual_overrides"]["force_research"] = True
+        state["manual_overrides"]["coordination"] = "coordinated"
+        state["manual_overrides"]["continuity"] = "full"
+    elif re.search(r"\b(no research|without research|skip research)\b", lowered):
+        state["manual_overrides"]["force_research"] = False
     parsed = parse_constraint_text(
         change_text,
         registry,
@@ -1987,7 +2093,11 @@ def checkpoint_task(
     notes: str,
     artifacts: dict[str, Any] | None = None,
     part_id: str | None = None,
+    report_markdown: str | None = None,
+    verbosity: str = "compact",
 ) -> dict[str, Any]:
+    if verbosity not in RESULT_VERBOSITIES:
+        fail(f"invalid checkpoint verbosity `{verbosity}`")
     state = load_task_state(task_id, root, registry)
     recommendation = state.get("confirmed_plan") or state.get("recommendation")
     if recommendation is None:
@@ -2012,7 +2122,7 @@ def checkpoint_task(
         part_id=part_id,
         notes=notes,
         artifacts=artifacts,
-        report_markdown=None,
+        report_markdown=report_markdown,
         final_outcome=final_outcome,
         action=action,
         reason=reason,
@@ -2028,23 +2138,28 @@ def checkpoint_task(
     payload = {
         "task_id": task_id,
         "phase_id": current_phase_id,
+        "verbosity": verbosity,
         "recommended_outcome": final_outcome,
         "change_reason": reason,
         "current_state": state["continuation"]["current_state"],
         "recommended_action": action,
         "next_best_action": state["continuation"]["next_best_action"],
-        "optional_parallel_follow_up": state["continuation"]["optional_parallel_follow_up"],
         "safe_stop_point": state["continuation"]["safe_stop_point"],
         "resume_instructions": state["continuation"]["resume_instructions"],
         "apply_command": f"relaykit.py advance-task --task-id {task_id}",
-        "remaining_uncertainty": state.get("classification", {}).get("remaining_uncertainty", ""),
-        "estimated_overhead": recommendation["overhead"]["coordination"],
-        "observed_payoff": "unknown",
         "checkpoint_policy": matched_part.get("checkpoint_policy", "gate") if matched_part else "gate",
+        "report_markdown_captured": bool(report_markdown),
     }
+    optional_parallel_follow_up = state["continuation"]["optional_parallel_follow_up"]
+    if optional_parallel_follow_up:
+        payload["optional_parallel_follow_up"] = optional_parallel_follow_up
     state_file, summary_file = save_task_state(state, registry)
-    payload["state_path"] = str(state_file)
-    payload["summary_path"] = str(summary_file)
+    if verbosity == "verbose":
+        payload["remaining_uncertainty"] = state.get("classification", {}).get("remaining_uncertainty", "")
+        payload["estimated_overhead"] = recommendation["overhead"]["coordination"]
+        payload["observed_payoff"] = "unknown"
+        payload["state_path"] = str(state_file)
+        payload["summary_path"] = str(summary_file)
     return payload
 
 
@@ -2137,7 +2252,10 @@ def checkpoint_phase(
     task_id: str,
     reports: list[dict[str, Any]],
     phase_id: str | None = None,
+    verbosity: str = "compact",
 ) -> dict[str, Any]:
+    if verbosity not in RESULT_VERBOSITIES:
+        fail(f"invalid checkpoint verbosity `{verbosity}`")
     state = load_task_state(task_id, root, registry)
     recommendation = state.get("confirmed_plan") or state.get("recommendation")
     if recommendation is None:
@@ -2182,19 +2300,19 @@ def checkpoint_phase(
         aggregate_notes.append(notes)
         if matched_part:
             checkpoint_policies[part_id] = matched_part.get("checkpoint_policy", "gate")
-        report_summaries.append(
-            {
-                "part_id": part_id,
-                "recommended_outcome": final_outcome,
-                "recommended_action": action,
-                "change_reason": reason,
-                "checkpoint_policy": checkpoint_policies.get(part_id, "gate"),
-                "notes": notes,
-                "artifact_keys": sorted((artifacts or {}).keys()),
-                "has_report_markdown": bool(report_markdown),
-                "recorded_at": event.get("at"),
-            }
-        )
+        report_summary = {
+            "part_id": part_id,
+            "recommended_outcome": final_outcome,
+            "recommended_action": action,
+            "change_reason": reason,
+            "checkpoint_policy": checkpoint_policies.get(part_id, "gate"),
+            "has_report_markdown": bool(report_markdown),
+        }
+        if verbosity == "verbose":
+            report_summary["notes"] = notes
+            report_summary["artifact_keys"] = sorted((artifacts or {}).keys())
+            report_summary["recorded_at"] = event.get("at")
+        report_summaries.append(report_summary)
 
     aggregate_outcome = _aggregate_phase_outcome(final_outcomes)
     aggregate_action, aggregate_reason = recommend_checkpoint_action(
@@ -2225,6 +2343,7 @@ def checkpoint_phase(
     payload = {
         "task_id": task_id,
         "phase_id": target_phase_id,
+        "verbosity": verbosity,
         "report_count": len(report_summaries),
         "reports": report_summaries,
         "recommended_outcome": aggregate_outcome,
@@ -2232,18 +2351,21 @@ def checkpoint_phase(
         "current_state": state["continuation"]["current_state"],
         "recommended_action": aggregate_action,
         "next_best_action": state["continuation"]["next_best_action"],
-        "optional_parallel_follow_up": state["continuation"]["optional_parallel_follow_up"],
         "safe_stop_point": state["continuation"]["safe_stop_point"],
         "resume_instructions": state["continuation"]["resume_instructions"],
         "apply_command": f"relaykit.py advance-task --task-id {task_id}",
-        "remaining_uncertainty": state.get("classification", {}).get("remaining_uncertainty", ""),
-        "estimated_overhead": recommendation["overhead"]["coordination"],
-        "observed_payoff": "unknown",
-        "checkpoint_policies": checkpoint_policies,
     }
+    optional_parallel_follow_up = state["continuation"]["optional_parallel_follow_up"]
+    if optional_parallel_follow_up:
+        payload["optional_parallel_follow_up"] = optional_parallel_follow_up
     state_file, summary_file = save_task_state(state, registry)
-    payload["state_path"] = str(state_file)
-    payload["summary_path"] = str(summary_file)
+    if verbosity == "verbose":
+        payload["remaining_uncertainty"] = state.get("classification", {}).get("remaining_uncertainty", "")
+        payload["estimated_overhead"] = recommendation["overhead"]["coordination"]
+        payload["observed_payoff"] = "unknown"
+        payload["checkpoint_policies"] = checkpoint_policies
+        payload["state_path"] = str(state_file)
+        payload["summary_path"] = str(summary_file)
     return payload
 
 
@@ -2270,6 +2392,50 @@ def optional_follow_up(action: str) -> str:
     return ""
 
 
+def _resume_part_summary(part: dict[str, Any]) -> dict[str, Any]:
+    assignment = part.get("assignment", {})
+    summary = {
+        "part_id": part.get("part_id"),
+        "name": part.get("name"),
+        "role": assignment.get("role"),
+        "host": assignment.get("host"),
+        "model": assignment.get("model"),
+        "checkpoint_policy": part.get("checkpoint_policy", "gate"),
+    }
+    if part.get("git_branch"):
+        summary["git_branch"] = part["git_branch"]
+    return summary
+
+
+def _phase_task_part_summary(part: dict[str, Any]) -> dict[str, Any]:
+    assignment = part.get("assignment", {})
+    payload = {
+        "part_id": part.get("part_id"),
+        "name": part.get("name"),
+        "checkpoint_policy": part.get("checkpoint_policy", "gate"),
+        "assignment": {
+            "role": assignment.get("role"),
+            "host": assignment.get("host"),
+            "model": assignment.get("model"),
+        },
+    }
+    if part.get("git_branch"):
+        payload["git_branch"] = part["git_branch"]
+    return payload
+
+
+def _phase_summary(phase: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "phase_id": phase.get("phase_id"),
+        "label": phase.get("label"),
+        "status": phase.get("status"),
+        "setup": deepcopy(phase.get("setup", {})),
+        "change_reason": phase.get("change_reason"),
+        "entry_action": phase.get("entry_action"),
+        "task_parts": [_phase_task_part_summary(part) for part in phase.get("task_parts", [])],
+    }
+
+
 TERMINAL_STATUSES = {"failed", "abandoned", "reflected"}
 CHECKPOINT_POLICIES = {"auto", "notify", "gate"}
 
@@ -2294,44 +2460,73 @@ def resume_task(
     *,
     root: Path,
     task_id: str,
+    verbosity: str = "compact",
 ) -> dict[str, Any]:
+    if verbosity not in RESUME_VERBOSITIES:
+        fail(f"invalid resume verbosity `{verbosity}`")
     state = load_task_state(task_id, root, registry)
     payload: dict[str, Any] = {
         "task_id": task_id,
         "stage": "resume",
+        "verbosity": verbosity,
         "summary": state.get("continuation", {}),
         "status": state.get("status"),
-        "recommendation": state.get("confirmed_plan") or state.get("recommendation"),
+        "current_phase_id": state.get("current_phase_id"),
         "resume_questions": [],
     }
+    if verbosity == "verbose":
+        payload["recommendation"] = state.get("confirmed_plan") or state.get("recommendation")
     if is_stale(state):
         payload["resume_questions"] = [
             "What changed since the last checkpoint?",
             "Should RelayKit keep the current setup or recommend a new one?",
         ]
-    # Include prompt stacks for active task parts so the host can fully resume
     plan = active_plan(state)
     if plan and state.get("status") not in TERMINAL_STATUSES:
-        parts_with_stacks: list[dict[str, Any]] = []
-        for part in plan.get("task_parts", []):
-            assignment = part.get("assignment", {})
-            stack_paths, stack_components = build_part_stack(
+        payload["setup"] = deepcopy(plan.get("setup", {}))
+        if verbosity == "verbose":
+            parts_with_stacks: list[dict[str, Any]] = []
+            for part in plan.get("task_parts", []):
+                assignment = part.get("assignment", {})
+                stack_paths, stack_components = build_part_stack(
+                    registry,
+                    skill_name=assignment.get("skill", ""),
+                    host_name=assignment.get("host", ""),
+                    model_name=assignment.get("model", ""),
+                    persona_name=assignment.get("persona"),
+                )
+                parts_with_stacks.append({
+                    "part_id": part.get("part_id"),
+                    "name": part.get("name"),
+                    "objective": part.get("objective"),
+                    "prompt_stack": stack_paths,
+                    "stack_components": stack_components,
+                    "git_branch": part.get("git_branch"),
+                    "prior_artifacts": collect_prior_artifacts(state, part.get("part_id", "")),
+                })
+            payload["task_parts"] = parts_with_stacks
+        else:
+            payload["task_parts"] = [
+                _resume_part_summary(part)
+                for part in plan.get("task_parts", [])
+            ]
+        if plan.get("setup", {}).get("continuity") == "lean":
+            phase = current_phase(state)
+            checkpointed_parts = set(_phase_checkpointed_parts(phase)) if phase else set()
+            remaining_parts = [
+                part for part in plan.get("task_parts", [])
+                if part.get("part_id") not in checkpointed_parts
+            ]
+            if not remaining_parts:
+                remaining_parts = plan.get("task_parts", [])
+            payload["launch_bundle"] = build_launch_bundle(
+                state,
+                remaining_parts,
                 registry,
-                skill_name=assignment.get("skill", ""),
-                host_name=assignment.get("host", ""),
-                model_name=assignment.get("model", ""),
-                persona_name=assignment.get("persona"),
+                verbosity="compact",
             )
-            parts_with_stacks.append({
-                "part_id": part.get("part_id"),
-                "name": part.get("name"),
-                "objective": part.get("objective"),
-                "prompt_stack": stack_paths,
-                "stack_components": stack_components,
-                "git_branch": part.get("git_branch"),
-                "prior_artifacts": collect_prior_artifacts(state, part.get("part_id", "")),
-            })
-        payload["task_parts"] = parts_with_stacks
+            payload["launch_bundle_scope"] = "remaining_parts" if checkpointed_parts else "all_current_parts"
+            payload["remaining_part_ids"] = [part.get("part_id") for part in remaining_parts if part.get("part_id")]
         profile_dirname = registry["defaults"]["profile_dirname"]
         sp = scratchpad_path(root, profile_dirname, task_id)
         if sp.exists():
@@ -2350,7 +2545,10 @@ def advance_task(
     change_text: str | None,
     workspace_profile: dict[str, Any] | None,
     project_profile: dict[str, Any] | None,
+    verbosity: str = "compact",
 ) -> dict[str, Any]:
+    if verbosity not in RESULT_VERBOSITIES:
+        fail(f"invalid advance verbosity `{verbosity}`")
     state = load_task_state(task_id, root, registry)
     current = current_phase(state)
     if current is None:
@@ -2382,15 +2580,18 @@ def advance_task(
             "resume_instructions": "This task is terminated. Start a new task if needed.",
         }
         state_file, summary_file = save_task_state(state, registry)
-        return {
+        payload = {
             "task_id": task_id,
             "stage": "stopped",
+            "verbosity": verbosity,
             "action": "stop",
             "phase_id": current["phase_id"],
             "continuation": state["continuation"],
-            "state_path": str(state_file),
-            "summary_path": str(summary_file),
         }
+        if verbosity == "verbose":
+            payload["state_path"] = str(state_file)
+            payload["summary_path"] = str(summary_file)
+        return payload
 
     if effective_action == "keep_setup":
         current["history"].append(
@@ -2410,15 +2611,18 @@ def advance_task(
             "resume_instructions": f"Run `relaykit.py resume-task --task-id {task_id}` to continue.",
         }
         state_file, summary_file = save_task_state(state, registry)
-        return {
+        payload = {
             "task_id": task_id,
             "stage": "continued",
+            "verbosity": verbosity,
             "action": effective_action,
             "phase_id": current["phase_id"],
             "continuation": state["continuation"],
-            "state_path": str(state_file),
-            "summary_path": str(summary_file),
         }
+        if verbosity == "verbose":
+            payload["state_path"] = str(state_file)
+            payload["summary_path"] = str(summary_file)
+        return payload
 
     if effective_action == "pause_for_research":
         new_plan = build_research_recommendation(state, registry)
@@ -2474,16 +2678,19 @@ def advance_task(
         "resume_instructions": f"Run `relaykit.py resume-task --task-id {task_id}` to continue.",
     }
     state_file, summary_file = save_task_state(state, registry)
-    return {
+    payload = {
         "task_id": task_id,
         "stage": "advanced",
+        "verbosity": verbosity,
         "action": effective_action,
-        "phase": new_phase,
-        "confirmed_plan": new_plan,
+        "phase": _phase_summary(new_phase) if verbosity == "compact" else new_phase,
         "continuation": state["continuation"],
-        "state_path": str(state_file),
-        "summary_path": str(summary_file),
     }
+    if verbosity == "verbose":
+        payload["confirmed_plan"] = new_plan
+        payload["state_path"] = str(state_file)
+        payload["summary_path"] = str(summary_file)
+    return payload
 
 
 def inspect_task(
@@ -2694,9 +2901,10 @@ def build_handoff_card(
     if state["task"].get("remaining_uncertainty"):
         payload["remaining_uncertainty"] = state["task"]["remaining_uncertainty"]
     if scratchpad:
-        payload["scratchpad_path"] = scratchpad
-    if execution_context and (execution_context.get("validated_commands") or execution_context.get("notes")):
-        payload["execution_context"] = deepcopy(execution_context)
+        payload["scratchpad_path"] = _compact_display_path(scratchpad, state)
+    compact_execution_context = _compact_execution_context(execution_context)
+    if compact_execution_context:
+        payload["execution_context"] = compact_execution_context
     return payload
 
 
@@ -2767,7 +2975,12 @@ def collect_prior_artifacts(state: dict[str, Any], current_part_id: str) -> list
     return artifacts
 
 
-def render_prior_context(state: dict[str, Any], current_part_id: str) -> list[str]:
+def render_prior_context(
+    state: dict[str, Any],
+    current_part_id: str,
+    *,
+    verbosity: str = "compact",
+) -> list[str]:
     """Render prior artifacts and scratchpad pointer as markdown lines."""
     lines: list[str] = []
     prior = collect_prior_artifacts(state, current_part_id)
@@ -2788,11 +3001,9 @@ def render_prior_context(state: dict[str, Any], current_part_id: str) -> list[st
     lines.extend(["## Prior Context", ""])
 
     if scratchpad:
-        lines.extend([
-            f"Shared scratchpad: `{scratchpad}`",
-            "Append key findings before checkpointing.",
-            "",
-        ])
+        display_path = _compact_display_path(scratchpad, state) if verbosity == "compact" else scratchpad
+        lines.append(f"Scratchpad: `{display_path}`")
+        lines.append("")
 
     for entry in prior:
         a = entry["artifacts"]
@@ -2810,6 +3021,8 @@ def render_prior_context(state: dict[str, Any], current_part_id: str) -> list[st
         if a.get("blockers"):
             lines.append("**Blockers:** " + ", ".join(a["blockers"]))
             lines.append("")
+        if verbosity == "compact":
+            continue
 
     return lines
 
@@ -2868,31 +3081,31 @@ def render_task_part_markdown(
     assignment = part["assignment"]
     handoff_card = build_handoff_card(state, part, verbosity=verbosity)
     execution_context = state.get("execution_context") or {}
-    lines = [
-        f"# RelayKit Task Part: {part['name']}",
-        "",
-        f"- Task id: `{state['task_id']}`",
-        f"- Scope: `{state['scope']}`",
-        f"- Phase: `{state.get('current_phase_id') or 'unconfirmed'}`",
-        f"- Part id: `{part['part_id']}`",
-        f"- Host: `{assignment['host']}`",
-        f"- Model: `{assignment['model']}`",
-    ]
-    if assignment.get("reasoning_effort"):
-        lines.append(f"- Reasoning effort: `{assignment['reasoning_effort']}`")
-    if assignment.get("persona"):
-        lines.append(f"- Persona: `{assignment['persona']}`")
-    if part.get("git_branch"):
-        lines.append(f"- Git branch: `{part['git_branch']}`")
     policy = part.get("checkpoint_policy", "gate")
     policy_labels = {
         "auto": "auto (log only, no human pause)",
         "notify": "notify (record and notify, does not block)",
         "gate": "gate (requires human approval)",
     }
-    lines.append(f"- Checkpoint policy: `{policy_labels.get(policy, policy)}`")
-    lines.extend(["", "## Objective", "", part["objective"], "", "## Why This Assignment", "", part["reason"], "", "## Task Context", ""])
     if verbosity == "verbose":
+        lines = [
+            f"# RelayKit Task Part: {part['name']}",
+            "",
+            f"- Task id: `{state['task_id']}`",
+            f"- Scope: `{state['scope']}`",
+            f"- Phase: `{state.get('current_phase_id') or 'unconfirmed'}`",
+            f"- Part id: `{part['part_id']}`",
+            f"- Host: `{assignment['host']}`",
+            f"- Model: `{assignment['model']}`",
+        ]
+        if assignment.get("reasoning_effort"):
+            lines.append(f"- Reasoning effort: `{assignment['reasoning_effort']}`")
+        if assignment.get("persona"):
+            lines.append(f"- Persona: `{assignment['persona']}`")
+        if part.get("git_branch"):
+            lines.append(f"- Git branch: `{part['git_branch']}`")
+        lines.append(f"- Checkpoint policy: `{policy_labels.get(policy, policy)}`")
+        lines.extend(["", "## Objective", "", part["objective"], "", "## Why This Assignment", "", part["reason"], "", "## Task Context", ""])
         lines.extend(
             [
                 f"- Summary: {task_summary_text(state)}",
@@ -2904,12 +3117,40 @@ def render_task_part_markdown(
             ]
         )
     else:
+        lines = [
+            f"# RelayKit Task Part: {part['name']}",
+            "",
+            f"- `{assignment['host']}` / `{assignment['model']}` / `{policy}` checkpoint",
+            f"- Task: `{state['task_id']}` · Phase: `{state.get('current_phase_id') or 'unconfirmed'}`",
+            "",
+            "## Objective",
+            "",
+            part["objective"],
+            "",
+            f"Assignment fit: {part['reason']}",
+            "",
+            "## Task Context",
+            "",
+        ]
         lines.extend(_compact_task_context_lines(state))
         lines.append("")
-    prior_lines = render_prior_context(state, part["part_id"])
+    prior_lines = render_prior_context(state, part["part_id"], verbosity=verbosity)
     if prior_lines:
         lines.extend(prior_lines)
-    if execution_context.get("validated_commands") or execution_context.get("notes"):
+    compact_execution_context = _compact_execution_context(execution_context)
+    if verbosity == "compact" and compact_execution_context:
+        lines.extend(["## Runtime", ""])
+        for item in compact_execution_context.get("validated_commands", []):
+            label = "Validated command"
+            if item.get("source") == "verification-fallback":
+                label = "Validated fallback"
+            elif item.get("source") == "verification-target":
+                label = "Validated verification"
+            lines.append(f"- {label}: `{item['command']}`")
+        if compact_execution_context.get("note"):
+            lines.append(f"- Note: {compact_execution_context['note']}")
+        lines.append("")
+    elif verbosity == "verbose" and (execution_context.get("validated_commands") or execution_context.get("notes")):
         lines.extend(["## Validated Runtime Context", ""])
         for item in execution_context.get("validated_commands", []):
             description = item.get("description") or item.get("source") or "validated command"
@@ -2963,13 +3204,7 @@ def render_task_part_markdown(
         lines.extend(
             [
                 "The machine-readable handoff card is attached separately in this payload.",
-                f"- Verify role=`{assignment['role']}`, host=`{assignment['host']}`, model=`{assignment['model']}`.",
                 f"- Stop condition: {handoff_card['stop_condition']}",
-                "",
-                "## RelayKit Tools for This Phase",
-                "",
-                "- Worker: `relaykit_checkpoint_task`, `relaykit_show_task`, `relaykit_resume_task`",
-                "- Orchestrator: `relaykit_advance_task`, `relaykit_reflect_task`",
                 "",
             ]
         )
@@ -2977,7 +3212,7 @@ def render_task_part_markdown(
         [
             "## Start Here",
             "",
-            "Load the prompt stack in order, then execute only this task part against the current task context.",
+            "Load the prompt stack, execute only this part, then checkpoint with `relaykit_checkpoint_task`.",
             "",
         ]
     )

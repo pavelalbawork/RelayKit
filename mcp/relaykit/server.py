@@ -594,6 +594,8 @@ def tool_checkpoint_task(arguments: dict[str, Any]) -> dict[str, Any]:
         notes=arguments.get("notes") or "",
         artifacts=arguments.get("artifacts"),
         part_id=arguments.get("part_id"),
+        report_markdown=arguments.get("report_markdown"),
+        verbosity=arguments.get("verbosity", "compact"),
     )
     return make_text_result(json_text(payload), structured=payload)
 
@@ -616,6 +618,7 @@ def tool_checkpoint_phase(arguments: dict[str, Any]) -> dict[str, Any]:
         task_id=task_id,
         phase_id=arguments.get("phase_id"),
         reports=reports,
+        verbosity=arguments.get("verbosity", "compact"),
     )
     return make_text_result(json_text(payload), structured=payload)
 
@@ -659,6 +662,7 @@ def tool_advance_task(arguments: dict[str, Any]) -> dict[str, Any]:
         change_text=arguments.get("change"),
         workspace_profile=workspace_profile,
         project_profile=project_profile,
+        verbosity=arguments.get("verbosity", "compact"),
     )
     return make_text_result(json_text(payload), structured=payload)
 
@@ -676,6 +680,7 @@ def tool_resume_task(arguments: dict[str, Any]) -> dict[str, Any]:
         registry,
         root=storage_root,
         task_id=task_id,
+        verbosity=arguments.get("verbosity", "compact"),
     )
     return make_text_result(json_text(payload), structured=payload)
 
@@ -1132,6 +1137,8 @@ TOOLS: dict[str, dict[str, Any]] = {
                 "part_id": {"type": "string", "description": "The task part being checkpointed."},
                 "outcome": {"type": "string", "enum": sorted(taskflow.CHECKPOINT_OUTCOMES)},
                 "notes": {"type": "string"},
+                "report_markdown": {"type": "string"},
+                "verbosity": {"type": "string", "enum": sorted(taskflow.RESULT_VERBOSITIES)},
                 "artifacts": {
                     "type": "object",
                     "description": "Structured outputs from this task part to share with downstream task parts.",
@@ -1169,6 +1176,7 @@ TOOLS: dict[str, dict[str, Any]] = {
                 "task_scope": {"type": "string", "enum": ["workspace", "project"]},
                 "task_id": {"type": "string"},
                 "phase_id": {"type": "string"},
+                "verbosity": {"type": "string", "enum": sorted(taskflow.RESULT_VERBOSITIES)},
                 "reports": {
                     "type": "array",
                     "items": {
@@ -1231,7 +1239,8 @@ TOOLS: dict[str, dict[str, Any]] = {
                 "action": {"type": "string", "enum": sorted(taskflow.CHECKPOINT_ACTIONS)},
                 "change_reason": {"type": "string", "enum": sorted(taskflow.CHANGE_REASONS)},
                 "notes": {"type": "string"},
-                "change": {"type": "string"}
+                "change": {"type": "string"},
+                "verbosity": {"type": "string", "enum": sorted(taskflow.RESULT_VERBOSITIES)}
             },
             "required": ["task_id"],
             "additionalProperties": False
@@ -1248,7 +1257,8 @@ TOOLS: dict[str, dict[str, Any]] = {
                 "workspace_profile": {"type": "string"},
                 "project_profile": {"type": "string"},
                 "task_scope": {"type": "string", "enum": ["workspace", "project"]},
-                "task_id": {"type": "string"}
+                "task_id": {"type": "string"},
+                "verbosity": {"type": "string", "enum": sorted(taskflow.RESUME_VERBOSITIES)}
             },
             "required": ["task_id"],
             "additionalProperties": False

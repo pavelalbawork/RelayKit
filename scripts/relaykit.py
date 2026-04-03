@@ -3294,6 +3294,8 @@ def command_checkpoint_task(args: argparse.Namespace) -> int:
             notes=args.notes or "",
             artifacts=artifacts,
             part_id=args.part_id,
+            report_markdown=args.report_markdown,
+            verbosity=args.verbosity,
         )
     except ValueError as error:
         message, details = taskflow.parse_failure(error)
@@ -3318,6 +3320,7 @@ def command_checkpoint_phase(args: argparse.Namespace) -> int:
             task_id=args.task_id,
             phase_id=args.phase_id,
             reports=reports,
+            verbosity=args.verbosity,
         )
     except ValueError as error:
         message, details = taskflow.parse_failure(error)
@@ -3343,6 +3346,7 @@ def command_advance_task(args: argparse.Namespace) -> int:
             change_text=args.change,
             workspace_profile=workspace_profile,
             project_profile=project_profile,
+            verbosity=args.verbosity,
         )
     except ValueError as error:
         message, details = taskflow.parse_failure(error)
@@ -3362,6 +3366,7 @@ def command_resume_task(args: argparse.Namespace) -> int:
             registry,
             root=storage_root,
             task_id=args.task_id,
+            verbosity=args.verbosity,
         )
     except ValueError as error:
         message, details = taskflow.parse_failure(error)
@@ -3535,6 +3540,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser_checkpoint_task.add_argument("--outcome", choices=sorted(taskflow.CHECKPOINT_OUTCOMES))
     parser_checkpoint_task.add_argument("--notes")
     parser_checkpoint_task.add_argument("--artifacts", help="JSON object with findings, files_discovered, decisions, blockers.")
+    parser_checkpoint_task.add_argument("--report-markdown", help="Optional markdown summary to preserve for later consolidation.")
+    parser_checkpoint_task.add_argument("--verbosity", choices=sorted(taskflow.RESULT_VERBOSITIES), default="compact")
     parser_checkpoint_task.set_defaults(func=command_checkpoint_task)
 
     parser_checkpoint_phase = subparsers.add_parser(
@@ -3549,6 +3556,7 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="JSON array of report objects with part_id, optional outcome, notes, optional artifacts, and optional report_markdown.",
     )
+    parser_checkpoint_phase.add_argument("--verbosity", choices=sorted(taskflow.RESULT_VERBOSITIES), default="compact")
     parser_checkpoint_phase.set_defaults(func=command_checkpoint_phase)
 
     parser_prepare_git = subparsers.add_parser(
@@ -3570,6 +3578,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser_advance_task.add_argument("--change-reason", choices=sorted(taskflow.CHANGE_REASONS))
     parser_advance_task.add_argument("--notes")
     parser_advance_task.add_argument("--change")
+    parser_advance_task.add_argument("--verbosity", choices=sorted(taskflow.RESULT_VERBOSITIES), default="compact")
     parser_advance_task.set_defaults(func=command_advance_task)
 
     parser_resume_task = subparsers.add_parser(
@@ -3578,6 +3587,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_task_context_arguments(parser_resume_task)
     parser_resume_task.add_argument("--task-id", required=True)
+    parser_resume_task.add_argument("--verbosity", choices=sorted(taskflow.RESUME_VERBOSITIES), default="compact")
     parser_resume_task.set_defaults(func=command_resume_task)
 
     parser_render_task_part = subparsers.add_parser(
