@@ -9,6 +9,7 @@
 | `confirm-task` | Accept or modify the recommended lane setup |
 | `show-task` | View current task state and lane assignments |
 | `checkpoint-task` | Record progress at a named milestone |
+| `prepare-git` | Explicitly create per-task-part git branches after confirmation |
 | `advance-task` | Apply a setup or phase change after checkpoint |
 | `resume-task` | Resume a paused task with context for the active lanes |
 | `render-task-part` | Render the launch bundle for one task part |
@@ -19,6 +20,7 @@
 | Command | Purpose |
 |---|---|
 | `init-workspace` | Create a persistent workspace profile |
+| `guided-setup` | Create a workspace profile from guided first-run answers |
 | `init-project` | Create a project profile inheriting workspace defaults |
 | `init-persona` | Scaffold a new persona file |
 | `host-status` | Check whether a harness is ready and get onboarding actions |
@@ -71,4 +73,4 @@ relaykit reflect-task --workspace-root . --task-id <id> --split-worth-it yes --t
 
 The MCP server exposes the operational RelayKit commands as tools prefixed with `relaykit_`:
 
-`relaykit_start_task`, `relaykit_answer_task`, `relaykit_confirm_task`, `relaykit_show_task`, `relaykit_checkpoint_task`, `relaykit_advance_task`, `relaykit_resume_task`, `relaykit_render_task_part`, `relaykit_reflect_task`, `relaykit_host_status`, `relaykit_setup`, `relaykit_bootstrap_host`, `relaykit_uninstall_host`, `relaykit_acknowledge_host`, `relaykit_install_self`, `relaykit_smoke`, `relaykit_doctor`, `relaykit_list`, `relaykit_preset`, `relaykit_stack`, `relaykit_render_prompt_stack`, `relaykit_init_workspace`, `relaykit_init_project`, `relaykit_init_persona`.
+`relaykit_start_task`, `relaykit_answer_task`, `relaykit_confirm_task`, `relaykit_show_task`, `relaykit_checkpoint_task`, `relaykit_prepare_git`, `relaykit_advance_task`, `relaykit_resume_task`, `relaykit_render_task_part`, `relaykit_reflect_task`, `relaykit_host_status`, `relaykit_guided_setup`, `relaykit_setup`, `relaykit_bootstrap_host`, `relaykit_uninstall_host`, `relaykit_acknowledge_host`, `relaykit_install_self`, `relaykit_smoke`, `relaykit_doctor`, `relaykit_list`, `relaykit_preset`, `relaykit_stack`, `relaykit_render_prompt_stack`, `relaykit_init_workspace`, `relaykit_init_project`, `relaykit_init_persona`.

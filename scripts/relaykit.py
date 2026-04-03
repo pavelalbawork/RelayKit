@@ -650,6 +650,30 @@ def default_workspace_profile(registry: dict) -> dict:
     }
 
 
+def guided_workspace_profile(
+    registry: dict,
+    *,
+    available_hosts: list[str],
+    preset: str,
+    git_integration: bool,
+) -> dict:
+    profile = default_workspace_profile(registry)
+    hosts = ensure_known_values(available_hosts, valid=known_hosts(registry), label="available hosts")
+    if not hosts:
+        fail("guided setup requires at least one valid host")
+    if preset not in registry.get("presets", {}):
+        fail(f"unknown preset `{preset}`")
+    profile["preset"] = preset
+    profile["git_integration"] = bool(git_integration)
+    profile["inventory"]["available_hosts"] = hosts
+    profile["inventory"]["allowed_models_by_host"] = {
+        host_name: list(profile["inventory"]["allowed_models_by_host"].get(host_name, []))
+        for host_name in hosts
+    }
+    profile["notes"] = "Created by RelayKit guided setup."
+    return profile
+
+
 def default_project_profile(project_name: str) -> dict:
     return {
         "version": 1,
@@ -1899,8 +1923,41 @@ def build_doctor_payload(
         project_payload = status_payload(project_path, project_issues, optional=True)
 
     next_actions: list[str] = []
+    guided_setup: dict[str, object] | None = None
     if workspace_profile is None:
         next_actions.append(f"relaykit init-workspace --workspace-root {workspace_root}")
+        all_hosts = sorted(registry.get("hosts", {}).keys())
+        all_presets = sorted(registry.get("presets", {}).keys())
+        guided_setup = {
+            "message": "No workspace profile found. Answer these 3 questions to create one.",
+            "questions": [
+                {
+                    "id": "available_hosts",
+                    "prompt": f"Which AI coding tools do you have available? Options: {', '.join(all_hosts)}",
+                    "type": "multi_select",
+                    "options": all_hosts,
+                },
+                {
+                    "id": "preset",
+                    "prompt": f"What's your default working style? Options: {', '.join(all_presets)}",
+                    "type": "single_select",
+                    "options": all_presets,
+                    "default": registry_defaults(registry)["default_preset"],
+                },
+                {
+                    "id": "git_integration",
+                    "prompt": "Enable optional git branch preparation for task parts?",
+                    "type": "boolean",
+                    "default": False,
+                },
+            ],
+            "apply_command": f"relaykit guided-setup --workspace-root {workspace_root}",
+            "apply_arguments": {
+                "workspace_root": str(workspace_root),
+                "preset": registry_defaults(registry)["default_preset"],
+                "git_integration": False,
+            },
+        }
     if project_root and project_payload["status"] == "missing":
         next_actions.append(
             "relaykit init-project "
@@ -1922,6 +1979,8 @@ def build_doctor_payload(
         "persona_layer": persona_layer_summary(registry),
         "next_actions": next_actions,
     }
+    if guided_setup:
+        payload["guided_setup"] = guided_setup
     if requested_hosts or current_host:
         hosts = onboarding_hosts(requested_hosts, current_host=current_host)
         payload["host_onboarding"] = {
@@ -1939,6 +1998,39 @@ def init_workspace_profile_payload(*, workspace_root: Path, force: bool = False)
     path = workspace_profile_path(workspace_root, registry)
     ensure_profile_write(path, force)
     profile = default_workspace_profile(registry)
+    profile_issues = validate_profile(
+        profile,
+        registry,
+        expected_kind=PROFILE_KIND_WORKSPACE,
+        base_preset=registry_defaults(registry)["default_preset"],
+        origin="workspace profile",
+    )
+    if profile_issues:
+        fail("workspace profile is invalid", details=profile_issues)
+    write_json(path, profile)
+    return {"workspace_profile": str(path), "profile": profile}
+
+
+def guided_workspace_profile_payload(
+    *,
+    workspace_root: Path,
+    available_hosts: list[str],
+    preset: str,
+    git_integration: bool,
+    force: bool = False,
+) -> dict[str, object]:
+    registry = load_registry()
+    registry_issues = validate_registry(registry)
+    if registry_issues:
+        fail("registry validation failed", details=registry_issues)
+    path = workspace_profile_path(workspace_root, registry)
+    ensure_profile_write(path, force)
+    profile = guided_workspace_profile(
+        registry,
+        available_hosts=available_hosts,
+        preset=preset,
+        git_integration=git_integration,
+    )
     profile_issues = validate_profile(
         profile,
         registry,
@@ -2073,6 +2165,19 @@ def command_init_workspace(args: argparse.Namespace) -> int:
         fail("workspace profile is invalid", details=profile_issues)
     write_json(path, profile)
     print(json.dumps({"workspace_profile": str(path), "profile": profile}, indent=2))
+    return 0
+
+
+def command_guided_setup(args: argparse.Namespace) -> int:
+    workspace_root = Path(args.workspace_root).resolve()
+    payload = guided_workspace_profile_payload(
+        workspace_root=workspace_root,
+        available_hosts=args.host or [],
+        preset=args.preset,
+        git_integration=bool(args.git_integration),
+        force=bool(args.force),
+    )
+    print(json.dumps(payload, indent=2))
     return 0
 
 
@@ -2316,6 +2421,24 @@ def command_setup(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_prepare_git(args: argparse.Namespace) -> int:
+    registry = load_registry()
+    registry_issues = validate_registry(registry)
+    if registry_issues:
+        fail("registry validation failed", details=registry_issues)
+    _workspace_root, workspace_profile, _project_root, project_profile, storage_root = resolve_task_context(args, registry)
+    payload = taskflow.prepare_git(
+        registry,
+        root=storage_root,
+        task_id=args.task_id,
+        workspace_profile=workspace_profile,
+        project_profile=project_profile,
+        dry_run=bool(args.dry_run),
+    )
+    print(json.dumps(payload, indent=2))
+    return 0
+
+
 def command_uninstall_host(args: argparse.Namespace) -> int:
     hosts = onboarding_hosts(args.host, current_host=args.current_host)
     payload = {
@@ -2553,6 +2676,7 @@ def command_start_task(args: argparse.Namespace) -> int:
             task_scope=args.task_scope,
             allowed_hosts=args.allowed_host or None,
             skip_clarification=bool(args.skip_clarification),
+            dry_run=bool(getattr(args, "dry_run", False)),
         )
     except ValueError as error:
         message, details = taskflow.parse_failure(error)
@@ -2643,12 +2767,17 @@ def command_checkpoint_task(args: argparse.Namespace) -> int:
         fail("registry validation failed", details=registry_issues)
     _workspace_root, _workspace_profile, _project_root, _project_profile, storage_root = resolve_task_context(args, registry)
     try:
+        artifacts = None
+        if args.artifacts:
+            artifacts = json.loads(args.artifacts)
         payload = taskflow.checkpoint_task(
             registry,
             root=storage_root,
             task_id=args.task_id,
             outcome=args.outcome,
             notes=args.notes or "",
+            artifacts=artifacts,
+            part_id=args.part_id,
         )
     except ValueError as error:
         message, details = taskflow.parse_failure(error)
@@ -2777,24 +2906,25 @@ def add_task_context_arguments(parser: argparse.ArgumentParser) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="RelayKit: harness augmentation for multi-tool, human-in-the-loop parallel execution, with task intake and advanced prompt-stack tools."
+        description="RelayKit: coordinate multiple AI coding agents working in parallel, with human checkpoints between phases."
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {VERSION}")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     parser_start_task = subparsers.add_parser(
         "start-task",
-        help="Start a RelayKit intake flow for a multi-harness task and return the next clarification question or recommendation.",
+        help="Start a RelayKit intake flow and return the next clarification question or recommendation.",
     )
     add_task_context_arguments(parser_start_task)
     parser_start_task.add_argument("--task", required=True)
     parser_start_task.add_argument("--allowed-host", action="append")
     parser_start_task.add_argument("--skip-clarification", action="store_true")
+    parser_start_task.add_argument("--dry-run", action="store_true", help="Preview the recommendation without persisting any state.")
     parser_start_task.set_defaults(func=command_start_task)
 
     parser_answer_task = subparsers.add_parser(
         "answer-task",
-        help="Answer the current RelayKit clarification question for a harness-augmentation task.",
+        help="Answer the current RelayKit clarification question.",
     )
     add_task_context_arguments(parser_answer_task)
     parser_answer_task.add_argument("--task-id", required=True)
@@ -2828,9 +2958,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_task_context_arguments(parser_checkpoint_task)
     parser_checkpoint_task.add_argument("--task-id", required=True)
+    parser_checkpoint_task.add_argument("--part-id", help="The task part being checkpointed.")
     parser_checkpoint_task.add_argument("--outcome", choices=sorted(taskflow.CHECKPOINT_OUTCOMES))
     parser_checkpoint_task.add_argument("--notes")
+    parser_checkpoint_task.add_argument("--artifacts", help="JSON object with findings, files_discovered, decisions, blockers.")
     parser_checkpoint_task.set_defaults(func=command_checkpoint_task)
+
+    parser_prepare_git = subparsers.add_parser(
+        "prepare-git",
+        help="Create git branches for the current task parts after explicit confirmation.",
+    )
+    add_task_context_arguments(parser_prepare_git)
+    parser_prepare_git.add_argument("--task-id", required=True)
+    parser_prepare_git.add_argument("--dry-run", action="store_true")
+    parser_prepare_git.set_defaults(func=command_prepare_git)
 
     parser_advance_task = subparsers.add_parser(
         "advance-task",
@@ -2929,6 +3070,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser_init_workspace.add_argument("--force", action="store_true")
     parser_init_workspace.set_defaults(func=command_init_workspace)
 
+    parser_guided_setup = subparsers.add_parser(
+        "guided-setup",
+        help="Create a workspace profile from guided first-run answers.",
+    )
+    parser_guided_setup.add_argument("--workspace-root", default=".")
+    parser_guided_setup.add_argument("--host", action="append", required=True)
+    parser_guided_setup.add_argument("--preset", required=True)
+    parser_guided_setup.add_argument("--git-integration", action="store_true")
+    parser_guided_setup.add_argument("--force", action="store_true")
+    parser_guided_setup.set_defaults(func=command_guided_setup)
+
     parser_init_project = subparsers.add_parser(
         "init-project",
         help="Create an optional project RelayKit profile.",
@@ -2971,7 +3123,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser_host_status = subparsers.add_parser(
         "host-status",
-        help="Report whether a host is ready for RelayKit harness augmentation and return onboarding actions.",
+        help="Report whether a host is ready for RelayKit and return onboarding actions.",
     )
     parser_host_status.add_argument("--host", action="append")
     parser_host_status.add_argument(
@@ -2983,7 +3135,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser_bootstrap_host = subparsers.add_parser(
         "bootstrap-host",
-        help="Install RelayKit skills and supported host wiring for one or more harnesses.",
+        help="Install RelayKit skills and configure wiring for one or more hosts.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description=(
             "Install RelayKit-managed skills and host wiring. "
@@ -3012,11 +3164,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser_setup = subparsers.add_parser(
         "setup",
-        help="One-command first-use setup: wire the host, run a safe CLI smoke test, and print the next harness prompt.",
+        help="One-command first-use setup: wire the host, run a safe CLI smoke test, and print the next prompt.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description=(
             "Bootstrap one host for first use, optionally run a local RelayKit smoke flow, "
-            "and print the exact next MCP prompt to paste into the harness."
+            "and print the exact next MCP prompt to start."
         ),
         epilog=(
             "Examples:\n"
@@ -3042,7 +3194,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser_uninstall_host = subparsers.add_parser(
         "uninstall-host",
-        help="Remove RelayKit skills and supported host wiring for one or more harnesses.",
+        help="Remove RelayKit skills and wiring for one or more hosts.",
     )
     parser_uninstall_host.add_argument("--host", action="append")
     parser_uninstall_host.add_argument(
@@ -3057,7 +3209,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser_ack_host = subparsers.add_parser(
         "acknowledge-host",
-        help="Record that harness onboarding was offered and explicitly deferred.",
+        help="Record that host onboarding was offered and explicitly deferred.",
     )
     parser_ack_host.add_argument("--host", action="append")
     parser_ack_host.add_argument(
@@ -3069,11 +3221,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser_install_self = subparsers.add_parser(
         "install-self",
-        help="Create a local venv, install RelayKit, and optionally wire supported harnesses.",
+        help="Create a local venv, install RelayKit, and optionally wire supported hosts.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description=(
             "Create or reuse a local virtual environment, install RelayKit into it, "
-            "and optionally run harness onboarding in the same step. "
+            "and optionally run host onboarding in the same step. "
             "This is the safest default on Homebrew Python systems that reject "
             "ambient pip installs with the externally-managed-environment error."
         ),
@@ -3098,7 +3250,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser_smoke = subparsers.add_parser(
         "smoke",
-        help="Run a reusable RelayKit lifecycle smoke test and print the next harness prompt.",
+        help="Run a reusable RelayKit lifecycle smoke test and print the next prompt.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description=(
             "Run the standard RelayKit lifecycle smoke test in a scratch workspace. "

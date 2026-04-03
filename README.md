@@ -160,6 +160,18 @@ relaykit init-workspace --workspace-root . --start-with-defaults
 relaykit doctor --workspace-root .
 ```
 
+If no workspace profile exists yet and you want a non-interactive first-run path, use the guided flow instead:
+
+```bash
+relaykit guided-setup --workspace-root . --host codex --preset balanced-default
+```
+
+If `git_integration` is enabled in the workspace or project profile, RelayKit will not create branches during `confirm-task`. It will return an explicit follow-up step instead:
+
+```bash
+relaykit prepare-git --workspace-root . --task-id <id>
+```
+
 ## Example
 
 See the [end-to-end walkthrough](examples/basic-workspace/WALKTHROUGH.md) for a full task lifecycle: intake → clarification → recommendation → builder lane → checkpoint → reflect.

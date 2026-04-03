@@ -41,6 +41,10 @@
         "$ref": "#/$defs/laneOverride"
       }
     },
+    "git_integration": {
+      "type": "boolean",
+      "description": "Override workspace git_integration setting for this project."
+    },
     "notes": {
       "type": "string"
     }

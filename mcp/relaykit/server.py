@@ -173,10 +173,44 @@ def build_doctor_payload(arguments: dict[str, Any]) -> dict[str, Any]:
         project_payload = relaykit.status_payload(project_path, project_issues, optional=True)
 
     next_actions: list[str] = []
+    guided_setup = None
     if workspace_profile is None:
         next_actions.append(
             f"relaykit init-workspace --workspace-root {workspace_root}"
         )
+        all_hosts = sorted(registry.get("hosts", {}).keys())
+        all_presets = sorted(registry.get("presets", {}).keys())
+        guided_setup = {
+            "message": "No workspace profile found. Answer these 3 questions to create one:",
+            "questions": [
+                {
+                    "id": "available_hosts",
+                    "prompt": f"Which AI coding tools do you have available? Options: {', '.join(all_hosts)}",
+                    "type": "multi_select",
+                    "options": all_hosts,
+                },
+                {
+                    "id": "preset",
+                    "prompt": f"What's your default working style? Options: {', '.join(all_presets)}",
+                    "type": "single_select",
+                    "options": all_presets,
+                    "default": registry.get("defaults", {}).get("default_preset", "balanced-default"),
+                },
+                {
+                    "id": "git_integration",
+                    "prompt": "Enable git branch-per-task-part isolation? (recommended for team repos, optional for solo work)",
+                    "type": "boolean",
+                    "default": False,
+                },
+            ],
+            "apply_tool": "relaykit_guided_setup",
+            "apply_arguments": {
+                "workspace_root": str(workspace_root),
+                "preset": registry.get("defaults", {}).get("default_preset", "balanced-default"),
+                "git_integration": False,
+            },
+            "apply_command": f"relaykit guided-setup --workspace-root {workspace_root}",
+        }
     if arguments.get("project_root") and project_payload["status"] == "missing":
         next_actions.append(
             "relaykit init-project "
@@ -198,6 +232,8 @@ def build_doctor_payload(arguments: dict[str, Any]) -> dict[str, Any]:
         "persona_layer": relaykit.persona_layer_summary(registry),
         "next_actions": next_actions,
     }
+    if guided_setup:
+        payload["guided_setup"] = guided_setup
     if arguments.get("host") or arguments.get("current_host"):
         hosts = relaykit.onboarding_hosts(arguments.get("host"), current_host=bool(arguments.get("current_host")))
         payload["host_onboarding"] = {
@@ -523,6 +559,18 @@ def tool_init_persona(arguments: dict[str, Any]) -> dict[str, Any]:
     return make_text_result(json_text(payload), structured=payload)
 
 
+def tool_guided_setup(arguments: dict[str, Any]) -> dict[str, Any]:
+    workspace_root = Path(arguments.get("workspace_root") or ".").resolve()
+    payload = relaykit.guided_workspace_profile_payload(
+        workspace_root=workspace_root,
+        available_hosts=arguments.get("host") or [],
+        preset=arguments.get("preset"),
+        git_integration=bool(arguments.get("git_integration", False)),
+        force=bool(arguments.get("force", False)),
+    )
+    return make_text_result(json_text(payload), structured=payload)
+
+
 def tool_start_task(arguments: dict[str, Any]) -> dict[str, Any]:
     registry = validate_registry_or_fail()
     workspace_root, workspace_profile, project_root, project_profile, _storage_root = resolve_task_context(
@@ -539,6 +587,7 @@ def tool_start_task(arguments: dict[str, Any]) -> dict[str, Any]:
         task_scope=arguments.get("task_scope"),
         allowed_hosts=arguments.get("allowed_hosts"),
         skip_clarification=bool(arguments.get("skip_clarification", False)),
+        dry_run=bool(arguments.get("dry_run", False)),
     )
     return make_text_result(json_text(payload), structured=payload)
 
@@ -627,6 +676,28 @@ def tool_checkpoint_task(arguments: dict[str, Any]) -> dict[str, Any]:
         task_id=task_id,
         outcome=arguments.get("outcome"),
         notes=arguments.get("notes") or "",
+        artifacts=arguments.get("artifacts"),
+        part_id=arguments.get("part_id"),
+    )
+    return make_text_result(json_text(payload), structured=payload)
+
+
+def tool_prepare_git(arguments: dict[str, Any]) -> dict[str, Any]:
+    registry = validate_registry_or_fail()
+    _workspace_root, workspace_profile, _project_root, project_profile, storage_root = resolve_task_context(
+        registry,
+        arguments,
+    )
+    task_id = arguments.get("task_id")
+    if not task_id:
+        raise ValueError("task_id is required")
+    payload = taskflow.prepare_git(
+        registry,
+        root=storage_root,
+        task_id=task_id,
+        workspace_profile=workspace_profile,
+        project_profile=project_profile,
+        dry_run=bool(arguments.get("dry_run", False)),
     )
     return make_text_result(json_text(payload), structured=payload)
 
@@ -734,7 +805,7 @@ TOOLS: dict[str, dict[str, Any]] = {
         "handler": tool_doctor,
     },
     "relaykit_host_status": {
-        "description": "Report whether one or more harnesses are ready for RelayKit and return recommended onboarding actions before any task flow starts.",
+        "description": "Report whether one or more hosts are ready for RelayKit and return recommended onboarding actions before any task flow starts.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -746,7 +817,7 @@ TOOLS: dict[str, dict[str, Any]] = {
         "handler": tool_host_status,
     },
     "relaykit_bootstrap_host": {
-        "description": "Install RelayKit skills and auto-configurable wiring for one or more supported harnesses. Prefer this over manual config edits when MCP is available.",
+        "description": "Install RelayKit skills and auto-configure wiring for one or more supported hosts. Prefer this over manual config edits when MCP is available.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -761,8 +832,24 @@ TOOLS: dict[str, dict[str, Any]] = {
         },
         "handler": tool_bootstrap_host,
     },
+    "relaykit_guided_setup": {
+        "description": "Create a workspace profile from guided first-run answers when no RelayKit workspace profile exists yet.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "workspace_root": {"type": "string"},
+                "host": {"type": "array", "items": {"type": "string"}},
+                "preset": {"type": "string"},
+                "git_integration": {"type": "boolean"},
+                "force": {"type": "boolean"}
+            },
+            "required": ["host", "preset"],
+            "additionalProperties": False,
+        },
+        "handler": tool_guided_setup,
+    },
     "relaykit_setup": {
-        "description": "Run the first-use RelayKit setup flow: wire the harness, optionally run the local smoke test, and return the exact next prompt to paste into the host.",
+        "description": "Run the first-use RelayKit setup flow: wire the host, optionally run the local smoke test, and return the exact next prompt to start.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -780,7 +867,7 @@ TOOLS: dict[str, dict[str, Any]] = {
         "handler": tool_setup,
     },
     "relaykit_uninstall_host": {
-        "description": "Remove RelayKit skills and auto-configurable wiring for one or more supported harnesses.",
+        "description": "Remove RelayKit skills and wiring for one or more supported hosts.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -795,7 +882,7 @@ TOOLS: dict[str, dict[str, Any]] = {
         "handler": tool_uninstall_host,
     },
     "relaykit_acknowledge_host": {
-        "description": "Record that harness onboarding was offered and explicitly deferred for one or more harnesses.",
+        "description": "Record that host onboarding was offered and explicitly deferred for one or more hosts.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -807,7 +894,7 @@ TOOLS: dict[str, dict[str, Any]] = {
         "handler": tool_acknowledge_host,
     },
     "relaykit_install_self": {
-        "description": "Create a local venv, install RelayKit into it, and optionally wire supported harnesses.",
+        "description": "Create a local venv, install RelayKit into it, and optionally wire supported hosts.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -837,7 +924,7 @@ TOOLS: dict[str, dict[str, Any]] = {
         "handler": tool_smoke,
     },
     "relaykit_list": {
-        "description": "List registered skills, hosts, models, presets, personas, or preset lanes.",
+        "description": "List registered skills, hosts, models, presets, personas, or preset task parts.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -854,7 +941,7 @@ TOOLS: dict[str, dict[str, Any]] = {
         "handler": tool_list,
     },
     "relaykit_preset": {
-        "description": "Show one RelayKit preset or one lane inside a preset.",
+        "description": "Show one RelayKit preset or one task part definition inside a preset.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -867,7 +954,7 @@ TOOLS: dict[str, dict[str, Any]] = {
         "handler": tool_preset,
     },
     "relaykit_stack": {
-        "description": "Resolve the effective RelayKit lane stack as structured data.",
+        "description": "Resolve the effective RelayKit prompt stack as structured data.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -893,7 +980,7 @@ TOOLS: dict[str, dict[str, Any]] = {
         "handler": tool_stack,
     },
     "relaykit_render_prompt_stack": {
-        "description": "Render the effective RelayKit lane stack as Markdown for direct prompt loading.",
+        "description": "Render the effective RelayKit prompt stack as Markdown for direct prompt loading.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -992,7 +1079,8 @@ TOOLS: dict[str, dict[str, Any]] = {
                 "task_scope": {"type": "string", "enum": ["workspace", "project"]},
                 "task": {"type": "string"},
                 "allowed_hosts": {"type": "array", "items": {"type": "string"}},
-                "skip_clarification": {"type": "boolean"}
+                "skip_clarification": {"type": "boolean"},
+                "dry_run": {"type": "boolean", "description": "Preview the recommendation without persisting any state."}
             },
             "required": ["task"],
             "additionalProperties": False
@@ -1020,7 +1108,7 @@ TOOLS: dict[str, dict[str, Any]] = {
         "handler": tool_answer_task,
     },
     "relaykit_show_task": {
-        "description": "Show the current state of a RelayKit task and lane-planning instance, with optional debug reasoning layers.",
+        "description": "Show the current state of a RelayKit task, with optional debug reasoning layers.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -1038,7 +1126,7 @@ TOOLS: dict[str, dict[str, Any]] = {
         "handler": tool_show_task,
     },
     "relaykit_confirm_task": {
-        "description": "Accept a RelayKit lane recommendation or request setup changes after clarification is complete.",
+        "description": "Accept a RelayKit setup recommendation or request changes after clarification is complete.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -1067,13 +1155,51 @@ TOOLS: dict[str, dict[str, Any]] = {
                 "project_profile": {"type": "string"},
                 "task_scope": {"type": "string", "enum": ["workspace", "project"]},
                 "task_id": {"type": "string"},
+                "part_id": {"type": "string", "description": "The task part being checkpointed."},
                 "outcome": {"type": "string", "enum": sorted(taskflow.CHECKPOINT_OUTCOMES)},
-                "notes": {"type": "string"}
+                "notes": {"type": "string"},
+                "artifacts": {
+                    "type": "object",
+                    "description": "Structured outputs from this task part to share with downstream task parts.",
+                    "properties": {
+                        "findings": {"type": "string", "description": "Key discoveries or conclusions."},
+                        "files_discovered": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "File paths relevant to the task."
+                        },
+                        "decisions": {"type": "string", "description": "Decisions made during this task part's work."},
+                        "blockers": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Issues that may block downstream task parts."
+                        }
+                    },
+                    "additionalProperties": False
+                }
             },
             "required": ["task_id"],
             "additionalProperties": False
         },
         "handler": tool_checkpoint_task,
+    },
+    "relaykit_prepare_git": {
+        "description": "Prepare explicit git branches for the current task parts after user confirmation. This is optional and never runs automatically.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "workspace_root": {"type": "string"},
+                "workspace_profile": {"type": "string"},
+                "project_root": {"type": "string"},
+                "project_profile": {"type": "string"},
+                "task_scope": {"type": "string", "enum": ["workspace", "project"]},
+                "task_id": {"type": "string"},
+                "dry_run": {"type": "boolean"}
+            },
+            "required": ["task_id"],
+            "additionalProperties": False
+        },
+        "handler": tool_prepare_git,
     },
     "relaykit_advance_task": {
         "description": "Apply the latest checkpoint action or an explicit setup change and start the next task phase.",
@@ -1184,7 +1310,7 @@ SDK_SERVER = Server(
     name=SERVER_INFO["name"],
     version=SERVER_INFO["version"],
     instructions=(
-        "RelayKit harness augmentation tools for multi-tool, human-in-the-loop parallel execution."
+        "Coordinate multiple AI coding agents working in parallel, with human checkpoints between phases."
     ),
 )
 

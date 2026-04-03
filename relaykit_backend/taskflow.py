@@ -8,6 +8,8 @@ import re
 import secrets
 from typing import Any
 
+from . import git as git_module
+
 
 TASKFLOW_VERSION = 1
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -16,7 +18,7 @@ LEARNING_LOG_FILENAME = "learning-log.jsonl"
 LEARNING_SUMMARY_FILENAME = "learned-tendencies.json"
 
 QUALITY_POSTURES = {"balanced", "cost-aware", "quality-first", "speed-first"}
-CHECKPOINT_OUTCOMES = {"on_track", "blocked", "needs_reroute", "ready_for_next_phase"}
+CHECKPOINT_OUTCOMES = {"on_track", "blocked", "needs_reroute", "ready_for_next_phase", "failed", "abandoned"}
 CHECKPOINT_ACTIONS = {
     "keep_setup",
     "simplify_setup",
@@ -24,6 +26,7 @@ CHECKPOINT_ACTIONS = {
     "change_setup",
     "move_to_next_phase",
     "pause_for_research",
+    "stop",
 }
 CHANGE_REASONS = {"stage_change", "setup_underperformed", "new_information", "scope_change", "none"}
 REFLECTION_VALUES = {"yes", "no", "mixed", "unknown"}
@@ -187,6 +190,30 @@ def state_path(root: Path, profile_dirname: str, task_id: str) -> Path:
 
 def summary_path(root: Path, profile_dirname: str, task_id: str) -> Path:
     return task_dir(root, profile_dirname, task_id) / "summary.md"
+
+
+def scratchpad_path(root: Path, profile_dirname: str, task_id: str) -> Path:
+    return task_dir(root, profile_dirname, task_id) / "scratchpad.md"
+
+
+def _create_scratchpad(state: dict[str, Any], registry: dict[str, Any]) -> Path:
+    profile_dirname = registry["defaults"]["profile_dirname"]
+    root = Path(state["storage_root"])
+    path = scratchpad_path(root, profile_dirname, state["task_id"])
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            f"# Scratchpad — {state['task_id']}\n"
+            f"\n"
+            f"Shared context for all task parts working on this task.\n"
+            f"Each task part should **read this file before starting** and "
+            f"**append key findings before checkpointing**.\n"
+            f"\n"
+            f"---\n"
+            f"\n",
+            encoding="utf-8",
+        )
+    return path
 
 
 def learning_log_path(root: Path, profile_dirname: str) -> Path:
@@ -876,7 +903,7 @@ def build_research_recommendation(
                 "name": "research",
                 "objective": "Collect the missing evidence before the next execution phase begins.",
                 "assignment": {
-                    "skill": "researcher",
+                    "skill": ROLE_TO_SKILL.get("researcher", "researcher"),
                     "role": "researcher",
                     "host": assignment["host"],
                     "model": assignment["model"],
@@ -898,6 +925,53 @@ def build_research_recommendation(
         "confirm_prompt": "Accept this setup, or tell me what to change.",
         "internal_preset": state.get("recommendation", {}).get("internal_preset", "balanced-default"),
     }
+
+
+def _build_learned_influence(
+    state: dict[str, Any],
+    archetype: str,
+    learned_coordination: str | None,
+    learned_continuity: str | None,
+    applied_learned_setup: str | None,
+    assigned_parts: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Build a human-readable learned_influence block for recommendations."""
+    bucket = learned_archetype_preferences(state, archetype)
+    count = bucket.get("count", 0)
+    reasons: list[str] = []
+
+    if applied_learned_setup and count >= 2:
+        setup_str = "+".join(p for p in [learned_coordination, learned_continuity] if p)
+        reasons.append(
+            f"Based on {count} prior `{archetype}` tasks, you preferred `{setup_str}` coordination."
+        )
+
+    for part in assigned_parts:
+        role = part.get("assignment", {}).get("role", "")
+        host = part.get("assignment", {}).get("host", "")
+        learned_host = preferred_host_for_role(state, archetype, role)
+        if learned_host and learned_host == host:
+            reasons.append(
+                f"For the `{role}` role, you previously preferred `{host}` on `{archetype}` tasks."
+            )
+
+    return {
+        "preferred_setup": "+".join(
+            p for p in [learned_coordination, learned_continuity] if p
+        ) or None,
+        "applied_setup": applied_learned_setup is not None,
+        "prior_task_count": count,
+        "reasoning": reasons if reasons else ["No learned preferences applied — using defaults."],
+    }
+
+
+def _default_checkpoint_policy(role: str) -> str:
+    """Return the default checkpoint policy for a role."""
+    if role in ("reviewer", "critic"):
+        return "gate"
+    if role == "researcher":
+        return "auto"
+    return "notify"
 
 
 def setup_recommendation(
@@ -999,6 +1073,10 @@ def setup_recommendation(
             model_name=assignment["model"],
             persona_name=persona_name,
         )
+        # Determine checkpoint policy: preset lane override > role default
+        default_policy = _default_checkpoint_policy(part["role"])
+        lane_policy = (preferred_lane or {}).get("checkpoint_policy")
+        checkpoint_policy = lane_policy if lane_policy in CHECKPOINT_POLICIES else default_policy
         assigned_parts.append(
             {
                 "part_id": part["part_id"],
@@ -1013,6 +1091,7 @@ def setup_recommendation(
                     "credit_pool": assignment.get("credit_pool"),
                     "persona": persona_name,
                 },
+                "checkpoint_policy": checkpoint_policy,
                 "reason": part_reason(part, classification, assignment["host"]),
                 "prompt_stack": prompt_stack,
                 "stack_components": stack_components,
@@ -1096,14 +1175,11 @@ def setup_recommendation(
         "next_step": next_step,
         "confirm_prompt": "Accept this setup, or tell me what to change.",
         "internal_preset": preset_name,
-        "learned_influence": {
-            "preferred_setup": "+".join(
-                part
-                for part in [learned_coordination, learned_continuity]
-                if part
-            ) or None,
-            "applied_setup": applied_learned_setup is not None,
-        },
+        "learned_influence": _build_learned_influence(
+            state, classification["archetype"],
+            learned_coordination, learned_continuity,
+            applied_learned_setup, assigned_parts,
+        ),
     }
     state["classification"] = classification
     state["recommendation"] = recommendation
@@ -1459,6 +1535,7 @@ def start_task(
     task_scope: str | None = None,
     allowed_hosts: list[str] | None = None,
     skip_clarification: bool = False,
+    dry_run: bool = False,
 ) -> dict[str, Any]:
     if not task_text.strip():
         fail("task text is required")
@@ -1535,8 +1612,21 @@ def start_task(
         )
         state["inventory"]["needs_task_inventory"] = False
 
+    if dry_run:
+        state["clarification"]["skipped"] = True
+        recommendation = setup_recommendation(state, registry, workspace_profile, project_profile)
+        return {
+            "task_id": state["task_id"],
+            "stage": "dry_run",
+            "dry_run": True,
+            "recommendation": recommendation,
+            "classification": state.get("classification"),
+            "note": "Dry run — no state was persisted. Run start-task without --dry-run to begin.",
+        }
+
     payload = maybe_recommend(state, registry, workspace_profile, project_profile)
     state_file, summary_file = save_task_state(state, registry)
+    _create_scratchpad(state, registry)
     payload["state_path"] = str(state_file)
     payload["summary_path"] = str(summary_file)
     payload["setup_hint"] = "quick-start" if workspace_profile is None else "workspace-profile"
@@ -1673,6 +1763,15 @@ def confirm_task(
         "phase": phase,
         "continuation": state["continuation"],
     }
+    git_enabled = git_module.resolve_git_config(workspace_profile, project_profile)
+    repo_root = Path(state.get("project_root") or state.get("workspace_root") or ".")
+    if git_enabled and git_module.is_git_repo(repo_root):
+        payload["git_integration"] = {
+            "enabled": True,
+            "requires_confirmation": True,
+            "prepared": False,
+            "suggested_command": f"relaykit prepare-git --task-id {task_id}",
+        }
     state_file, summary_file = save_task_state(state, registry)
     payload["state_path"] = str(state_file)
     payload["summary_path"] = str(summary_file)
@@ -1681,6 +1780,10 @@ def confirm_task(
 
 def infer_checkpoint_outcome(notes: str) -> str:
     lowered = notes.lower()
+    if any(token in lowered for token in ["failed", "unrecoverable", "give up", "fatal"]):
+        return "failed"
+    if any(token in lowered for token in ["abandon", "cancel", "scrap", "not worth"]):
+        return "abandoned"
     if any(token in lowered for token in ["blocked", "can't", "cannot", "stuck"]):
         return "blocked"
     if any(token in lowered for token in ["reroute", "wrong tool", "bad fit"]):
@@ -1692,6 +1795,8 @@ def infer_checkpoint_outcome(notes: str) -> str:
 
 def recommend_checkpoint_action(state: dict[str, Any], outcome: str, notes: str) -> tuple[str, str]:
     lowered = notes.lower()
+    if outcome in ("failed", "abandoned"):
+        return "stop", "none"
     if outcome == "blocked" and any(token in lowered for token in ["unclear", "unknown", "need research", "missing context"]):
         return "pause_for_research", "new_information"
     if outcome == "needs_reroute":
@@ -1714,6 +1819,8 @@ def checkpoint_task(
     task_id: str,
     outcome: str | None,
     notes: str,
+    artifacts: dict[str, Any] | None = None,
+    part_id: str | None = None,
 ) -> dict[str, Any]:
     state = load_task_state(task_id, root, registry)
     recommendation = state.get("confirmed_plan") or state.get("recommendation")
@@ -1731,20 +1838,43 @@ def checkpoint_task(
             break
     if phase is None:
         fail("current phase is missing")
-    event = {
+    event: dict[str, Any] = {
         "at": now_iso(),
         "notes": notes,
         "recommended_outcome": final_outcome,
         "recommended_action": action,
         "change_reason": reason,
     }
+    if part_id:
+        event["part_id"] = part_id
+    if artifacts:
+        event["artifacts"] = {
+            "findings": artifacts.get("findings", ""),
+            "files_discovered": artifacts.get("files_discovered", []),
+            "decisions": artifacts.get("decisions", ""),
+            "blockers": artifacts.get("blockers", []),
+        }
+    # --- resolve matched task part for git + checkpoint policy ---
+    matched_part = None
+    if part_id:
+        matched_part = next(
+            (tp for tp in phase.get("task_parts", []) if tp.get("part_id") == part_id),
+            None,
+        )
+    if matched_part and matched_part.get("git_branch"):
+        git_branch = matched_part["git_branch"]
+        if git_branch:
+            repo_root = Path(state.get("project_root") or state.get("workspace_root") or ".")
+            diff = git_module.part_diff_stat(repo_root, task_id, part_id)
+            if diff:
+                event.setdefault("artifacts", {})["git_diff"] = diff
     phase["history"].append(event)
     state["status"] = final_outcome
     state["continuation"] = {
         "current_state": f"Checkpoint recorded with outcome `{final_outcome}`.",
         "next_best_action": checkpoint_next_step(action),
         "optional_parallel_follow_up": optional_follow_up(action),
-        "safe_stop_point": "Safe to stop now." if final_outcome in {"blocked", "ready_for_next_phase"} else "Better to continue until the current task part has another concrete result.",
+        "safe_stop_point": "Safe to stop now." if final_outcome in {"blocked", "ready_for_next_phase", "failed", "abandoned"} else "Better to continue until the current task part has another concrete result.",
         "resume_instructions": f"Run `relaykit.py resume-task --task-id {task_id}` to continue from the latest checkpoint.",
     }
     payload = {
@@ -1762,6 +1892,7 @@ def checkpoint_task(
         "remaining_uncertainty": state.get("classification", {}).get("remaining_uncertainty", ""),
         "estimated_overhead": recommendation["overhead"]["coordination"],
         "observed_payoff": "unknown",
+        "checkpoint_policy": matched_part.get("checkpoint_policy", "gate") if matched_part else "gate",
     }
     state_file, summary_file = save_task_state(state, registry)
     payload["state_path"] = str(state_file)
@@ -1777,6 +1908,7 @@ def checkpoint_next_step(action: str) -> str:
         "change_setup": "Reroute the task before continuing.",
         "move_to_next_phase": "Start the next phase with a fresh setup review.",
         "pause_for_research": "Pause execution and gather the missing evidence first.",
+        "stop": "Task is terminated. Run reflect-task to record learnings before moving on.",
     }
     return mapping[action]
 
@@ -1791,7 +1923,13 @@ def optional_follow_up(action: str) -> str:
     return ""
 
 
+TERMINAL_STATUSES = {"failed", "abandoned", "reflected"}
+CHECKPOINT_POLICIES = {"auto", "notify", "gate"}
+
+
 def is_stale(state: dict[str, Any]) -> bool:
+    if state.get("status") in TERMINAL_STATUSES:
+        return False
     updated = parse_iso(state.get("updated_at"))
     if updated is None:
         return False
@@ -1811,7 +1949,7 @@ def resume_task(
     task_id: str,
 ) -> dict[str, Any]:
     state = load_task_state(task_id, root, registry)
-    payload = {
+    payload: dict[str, Any] = {
         "task_id": task_id,
         "stage": "resume",
         "summary": state.get("continuation", {}),
@@ -1824,6 +1962,33 @@ def resume_task(
             "What changed since the last checkpoint?",
             "Should RelayKit keep the current setup or recommend a new one?",
         ]
+    # Include prompt stacks for active task parts so the host can fully resume
+    plan = active_plan(state)
+    if plan and state.get("status") not in TERMINAL_STATUSES:
+        parts_with_stacks: list[dict[str, Any]] = []
+        for part in plan.get("task_parts", []):
+            assignment = part.get("assignment", {})
+            stack_paths, stack_components = build_part_stack(
+                registry,
+                skill_name=assignment.get("skill", ""),
+                host_name=assignment.get("host", ""),
+                model_name=assignment.get("model", ""),
+                persona_name=assignment.get("persona"),
+            )
+            parts_with_stacks.append({
+                "part_id": part.get("part_id"),
+                "name": part.get("name"),
+                "objective": part.get("objective"),
+                "prompt_stack": stack_paths,
+                "stack_components": stack_components,
+                "git_branch": part.get("git_branch"),
+                "prior_artifacts": collect_prior_artifacts(state, part.get("part_id", "")),
+            })
+        payload["task_parts"] = parts_with_stacks
+        profile_dirname = registry["defaults"]["profile_dirname"]
+        sp = scratchpad_path(root, profile_dirname, task_id)
+        if sp.exists():
+            payload["scratchpad_path"] = str(sp)
     return payload
 
 
@@ -1850,6 +2015,35 @@ def advance_task(
     effective_reason = change_reason or (checkpoint or {}).get("change_reason") or "none"
     if effective_reason not in CHANGE_REASONS:
         fail(f"invalid change reason `{effective_reason}`")
+
+    if effective_action == "stop":
+        current["status"] = "completed"
+        current["history"].append(
+            {
+                "at": now_iso(),
+                "applied_action": "stop",
+                "change_reason": effective_reason,
+                "notes": notes or "",
+            }
+        )
+        state["status"] = state.get("status", "abandoned")  # preserve failed/abandoned from checkpoint
+        state["continuation"] = {
+            "current_state": f"Task terminated with status `{state['status']}`.",
+            "next_best_action": "Run reflect-task to record learnings.",
+            "optional_parallel_follow_up": "",
+            "safe_stop_point": "Task is done.",
+            "resume_instructions": "This task is terminated. Start a new task if needed.",
+        }
+        state_file, summary_file = save_task_state(state, registry)
+        return {
+            "task_id": task_id,
+            "stage": "stopped",
+            "action": "stop",
+            "phase_id": current["phase_id"],
+            "continuation": state["continuation"],
+            "state_path": str(state_file),
+            "summary_path": str(summary_file),
+        }
 
     if effective_action == "keep_setup":
         current["history"].append(
@@ -1967,6 +2161,85 @@ def inspect_task(
     }
 
 
+def _build_timeline(state: dict[str, Any]) -> list[dict[str, str]]:
+    """Build a chronological list of key task events with elapsed times."""
+    events: list[tuple[datetime | None, str]] = []
+    created = parse_iso(state.get("created_at"))
+    if created:
+        events.append((created, "Task started"))
+
+    # Clarification completion
+    questions = state.get("clarification", {}).get("questions", [])
+    if questions:
+        last_answered = None
+        for q in questions:
+            if q.get("answer"):
+                ts = parse_iso(q.get("answered_at"))
+                if ts and (last_answered is None or ts > last_answered):
+                    last_answered = ts
+        if last_answered:
+            events.append((last_answered, "Clarification complete"))
+
+    # Phase events
+    for phase in state.get("phases", []):
+        phase_created = parse_iso(phase.get("created_at"))
+        if phase_created:
+            events.append((phase_created, f"Phase `{phase['phase_id']}` confirmed"))
+        for event in phase.get("history", []):
+            ts = parse_iso(event.get("at"))
+            if ts is None:
+                continue
+            action = event.get("applied_action") or event.get("recommended_action", "")
+            outcome = event.get("recommended_outcome", "")
+            part = event.get("part_id", "")
+            if outcome:
+                label = f"Checkpoint: {outcome}"
+                if part:
+                    label += f" (part: `{part}`)"
+                if action:
+                    label += f" → {action}"
+                events.append((ts, label))
+            elif action:
+                events.append((ts, f"Advanced: {action}"))
+
+    events.sort(key=lambda e: e[0] or datetime.min.replace(tzinfo=timezone.utc))
+
+    timeline: list[dict[str, str]] = []
+    base = events[0][0] if events else None
+    prev = base
+    for ts, label in events:
+        entry: dict[str, str] = {"event": label}
+        if ts:
+            entry["at"] = ts.isoformat()
+            if base:
+                elapsed = ts - base
+                mins, secs = divmod(int(elapsed.total_seconds()), 60)
+                entry["elapsed"] = f"{mins:02d}:{secs:02d}"
+            if prev and ts > prev:
+                gap = ts - prev
+                gap_mins, gap_secs = divmod(int(gap.total_seconds()), 60)
+                entry["since_prev"] = f"+{gap_mins:02d}:{gap_secs:02d}"
+        prev = ts
+        timeline.append(entry)
+
+    # Add "now" marker
+    if base and state.get("status") not in TERMINAL_STATUSES:
+        now = datetime.now(timezone.utc)
+        total = now - base
+        mins, secs = divmod(int(total.total_seconds()), 60)
+        since = ""
+        if prev:
+            gap = now - prev
+            g_mins, g_secs = divmod(int(gap.total_seconds()), 60)
+            since = f"+{g_mins:02d}:{g_secs:02d}"
+        timeline.append({
+            "event": f"← now ({mins:02d}:{secs:02d} elapsed)",
+            "since_prev": since,
+        })
+
+    return timeline
+
+
 def show_task(
     registry: dict[str, Any],
     *,
@@ -1984,7 +2257,110 @@ def show_task(
         "current_phase_id": state.get("current_phase_id"),
         "current_phase": current_phase(state),
         "latest_checkpoint": latest_checkpoint_event(state),
+        "timeline": _build_timeline(state),
     }
+
+
+def prepare_git(
+    registry: dict[str, Any],
+    *,
+    root: Path,
+    task_id: str,
+    workspace_profile: dict[str, Any] | None,
+    project_profile: dict[str, Any] | None,
+    dry_run: bool,
+) -> dict[str, Any]:
+    state = load_task_state(task_id, root, registry)
+    if not git_module.resolve_git_config(workspace_profile, project_profile):
+        fail("git integration is disabled for this workspace/project")
+    phase = current_phase(state)
+    if phase is None:
+        fail("task must have an active phase before git preparation")
+    repo_root = Path(state.get("project_root") or state.get("workspace_root") or ".")
+    if not git_module.is_git_repo(repo_root):
+        fail(f"`{repo_root}` is not inside a git working tree")
+    base = git_module.current_branch(repo_root)
+    branches: list[dict[str, str]] = []
+    for part in phase.get("task_parts", []):
+        branch = git_module.part_branch_name(task_id, part["part_id"])
+        branches.append({"part_id": part["part_id"], "branch": branch})
+        if not dry_run:
+            created = git_module.create_part_branch(repo_root, task_id, part["part_id"], base)
+            if created:
+                part["git_branch"] = created
+    payload = {
+        "task_id": task_id,
+        "stage": "git_prepared" if not dry_run else "git_preview",
+        "dry_run": dry_run,
+        "repo_root": str(repo_root),
+        "base_branch": base,
+        "git_branches": branches,
+    }
+    if not dry_run:
+        state_file, summary_file = save_task_state(state, registry)
+        payload["state_path"] = str(state_file)
+        payload["summary_path"] = str(summary_file)
+    return payload
+
+
+def collect_prior_artifacts(state: dict[str, Any], current_part_id: str) -> list[dict[str, Any]]:
+    """Collect checkpoint artifacts from all phases, excluding the current part."""
+    artifacts: list[dict[str, Any]] = []
+    for phase in state.get("phases", []):
+        for event in phase.get("history", []):
+            if not event.get("artifacts"):
+                continue
+            if event.get("part_id") == current_part_id:
+                continue
+            artifacts.append({
+                "part_id": event.get("part_id", "unknown"),
+                "at": event.get("at", ""),
+                "artifacts": event["artifacts"],
+            })
+    return artifacts
+
+
+def render_prior_context(state: dict[str, Any], current_part_id: str) -> list[str]:
+    """Render prior artifacts and scratchpad pointer as markdown lines."""
+    lines: list[str] = []
+    prior = collect_prior_artifacts(state, current_part_id)
+    scratchpad = None
+    storage_root = state.get("storage_root")
+    if storage_root:
+        candidate = Path(storage_root) / ".relaykit" / "tasks" / state["task_id"] / "scratchpad.md"
+        if candidate.exists():
+            scratchpad = str(candidate)
+
+    if not prior and not scratchpad:
+        return lines
+
+    lines.extend(["## Prior Context", ""])
+
+    if scratchpad:
+        lines.extend([
+            f"Shared scratchpad: `{scratchpad}`",
+            "Read it for context from other task parts. Append your key findings before checkpointing.",
+            "",
+        ])
+
+    for entry in prior:
+        a = entry["artifacts"]
+        lines.append(f"### From `{entry['part_id']}` ({entry['at']})")
+        lines.append("")
+        if a.get("findings"):
+            lines.append(f"**Findings:** {a['findings']}")
+            lines.append("")
+        if a.get("decisions"):
+            lines.append(f"**Decisions:** {a['decisions']}")
+            lines.append("")
+        if a.get("files_discovered"):
+            lines.append("**Files discovered:** " + ", ".join(f"`{f}`" for f in a["files_discovered"]))
+            lines.append("")
+        if a.get("blockers"):
+            lines.append("**Blockers:** " + ", ".join(a["blockers"]))
+            lines.append("")
+
+    return lines
 
 
 def render_task_part_markdown(state: dict[str, Any], part: dict[str, Any]) -> str:
@@ -2003,6 +2379,15 @@ def render_task_part_markdown(state: dict[str, Any], part: dict[str, Any]) -> st
         lines.append(f"- Reasoning effort: `{assignment['reasoning_effort']}`")
     if assignment.get("persona"):
         lines.append(f"- Persona: `{assignment['persona']}`")
+    if part.get("git_branch"):
+        lines.append(f"- Git branch: `{part['git_branch']}`")
+    policy = part.get("checkpoint_policy", "gate")
+    policy_labels = {
+        "auto": "auto (log only, no human pause)",
+        "notify": "notify (record and notify, does not block)",
+        "gate": "gate (requires human approval)",
+    }
+    lines.append(f"- Checkpoint policy: `{policy_labels.get(policy, policy)}`")
     lines.extend(
         [
             "",
@@ -2022,6 +2407,13 @@ def render_task_part_markdown(state: dict[str, Any], part: dict[str, Any]) -> st
             f"- Verification: {state['task'].get('verification') or 'Not set.'}",
             f"- Remaining uncertainty: {state['task'].get('remaining_uncertainty') or 'None noted.'}",
             "",
+        ]
+    )
+    prior_lines = render_prior_context(state, part["part_id"])
+    if prior_lines:
+        lines.extend(prior_lines)
+    lines.extend(
+        [
             "## Prompt Stack",
             "",
         ]
@@ -2030,6 +2422,21 @@ def render_task_part_markdown(state: dict[str, Any], part: dict[str, Any]) -> st
         lines.append(f"- `{component['kind']}` `{component['id']}` -> `{component['path']}`")
     lines.extend(
         [
+            "",
+            "## RelayKit Tools for This Phase",
+            "",
+            "During execution, use only these RelayKit tools:",
+            "",
+            "- `relaykit_checkpoint_task` — record progress, findings, or blockers",
+            "- `relaykit_show_task` — check current task state",
+            "- `relaykit_resume_task` — recover context if session is interrupted",
+            "",
+            "After completion, the orchestrator uses:",
+            "",
+            "- `relaykit_advance_task` — apply checkpoint action and move forward",
+            "- `relaykit_reflect_task` — record learnings when the task is done",
+            "",
+            "Other RelayKit tools (`setup`, `doctor`, `bootstrap_host`, etc.) are for initial configuration only.",
             "",
             "## Start Here",
             "",
@@ -2055,7 +2462,9 @@ def render_task_part(
     if part is None:
         fail(f"task part `{part_id}` is not present in the current plan")
     markdown = render_task_part_markdown(state, part)
-    return {
+    profile_dirname = registry["defaults"]["profile_dirname"]
+    sp = scratchpad_path(root, profile_dirname, task_id)
+    result: dict[str, Any] = {
         "task_id": task_id,
         "phase_id": state.get("current_phase_id"),
         "part_id": part_id,
@@ -2068,7 +2477,10 @@ def render_task_part(
             "verification": state["task"].get("verification"),
             "remaining_uncertainty": state["task"].get("remaining_uncertainty"),
         },
+        "scratchpad_path": str(sp) if sp.exists() else None,
+        "prior_artifacts": collect_prior_artifacts(state, part_id),
     }
+    return result
 
 
 def reflect_task(

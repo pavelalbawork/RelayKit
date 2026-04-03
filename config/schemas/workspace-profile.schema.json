@@ -61,6 +61,11 @@
         "$ref": "#/$defs/laneOverride"
       }
     },
+    "git_integration": {
+      "type": "boolean",
+      "description": "Enable optional git branch-per-lane isolation. Default false.",
+      "default": false
+    },
     "notes": {
       "type": "string"
     }
