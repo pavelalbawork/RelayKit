@@ -2440,6 +2440,33 @@ TERMINAL_STATUSES = {"failed", "abandoned", "reflected"}
 CHECKPOINT_POLICIES = {"auto", "notify", "gate"}
 
 
+def _compact_setup_summary(setup: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "coordination": setup.get("coordination"),
+        "continuity": setup.get("continuity"),
+    }
+
+
+def _compact_continuation_summary(
+    continuation: dict[str, Any],
+    *,
+    has_launch_bundle: bool,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    for key in ("current_state", "next_best_action", "safe_stop_point"):
+        value = continuation.get(key)
+        if value:
+            payload[key] = value
+    follow_up = continuation.get("optional_parallel_follow_up")
+    if follow_up:
+        payload["optional_parallel_follow_up"] = follow_up
+    if not has_launch_bundle:
+        instructions = continuation.get("resume_instructions")
+        if instructions:
+            payload["resume_instructions"] = instructions
+    return payload
+
+
 def is_stale(state: dict[str, Any]) -> bool:
     if state.get("status") in TERMINAL_STATUSES:
         return False
@@ -2465,16 +2492,20 @@ def resume_task(
     if verbosity not in RESUME_VERBOSITIES:
         fail(f"invalid resume verbosity `{verbosity}`")
     state = load_task_state(task_id, root, registry)
+    launch_bundle: list[dict[str, Any]] | None = None
+    launch_bundle_scope: str | None = None
+    remaining_part_ids: list[str] = []
+    completed_part_ids: list[str] = []
     payload: dict[str, Any] = {
         "task_id": task_id,
         "stage": "resume",
         "verbosity": verbosity,
-        "summary": state.get("continuation", {}),
         "status": state.get("status"),
         "current_phase_id": state.get("current_phase_id"),
         "resume_questions": [],
     }
     if verbosity == "verbose":
+        payload["summary"] = state.get("continuation", {})
         payload["recommendation"] = state.get("confirmed_plan") or state.get("recommendation")
     if is_stale(state):
         payload["resume_questions"] = [
@@ -2483,8 +2514,8 @@ def resume_task(
         ]
     plan = active_plan(state)
     if plan and state.get("status") not in TERMINAL_STATUSES:
-        payload["setup"] = deepcopy(plan.get("setup", {}))
         if verbosity == "verbose":
+            payload["setup"] = deepcopy(plan.get("setup", {}))
             parts_with_stacks: list[dict[str, Any]] = []
             for part in plan.get("task_parts", []):
                 assignment = part.get("assignment", {})
@@ -2506,31 +2537,64 @@ def resume_task(
                 })
             payload["task_parts"] = parts_with_stacks
         else:
-            payload["task_parts"] = [
-                _resume_part_summary(part)
-                for part in plan.get("task_parts", [])
-            ]
+            payload["setup"] = _compact_setup_summary(plan.get("setup", {}))
         if plan.get("setup", {}).get("continuity") == "lean":
             phase = current_phase(state)
             checkpointed_parts = set(_phase_checkpointed_parts(phase)) if phase else set()
+            completed_part_ids = [
+                part.get("part_id")
+                for part in plan.get("task_parts", [])
+                if part.get("part_id") in checkpointed_parts
+            ]
             remaining_parts = [
                 part for part in plan.get("task_parts", [])
                 if part.get("part_id") not in checkpointed_parts
             ]
             if not remaining_parts:
                 remaining_parts = plan.get("task_parts", [])
-            payload["launch_bundle"] = build_launch_bundle(
+            launch_bundle = build_launch_bundle(
                 state,
                 remaining_parts,
                 registry,
                 verbosity="compact",
             )
-            payload["launch_bundle_scope"] = "remaining_parts" if checkpointed_parts else "all_current_parts"
-            payload["remaining_part_ids"] = [part.get("part_id") for part in remaining_parts if part.get("part_id")]
+            launch_bundle_scope = "remaining_parts" if checkpointed_parts else "all_current_parts"
+            remaining_part_ids = [part.get("part_id") for part in remaining_parts if part.get("part_id")]
+            if verbosity == "compact":
+                payload["task_parts"] = [_resume_part_summary(part) for part in remaining_parts]
+                if completed_part_ids:
+                    payload["completed_part_ids"] = completed_part_ids
+            else:
+                payload["launch_bundle"] = launch_bundle
+                payload["launch_bundle_scope"] = launch_bundle_scope
+                payload["remaining_part_ids"] = remaining_part_ids
+        elif verbosity == "compact":
+            payload["task_parts"] = [
+                _resume_part_summary(part)
+                for part in plan.get("task_parts", [])
+            ]
+        if verbosity == "compact":
+            payload["summary"] = _compact_continuation_summary(
+                state.get("continuation", {}),
+                has_launch_bundle=bool(launch_bundle),
+            )
+            if launch_bundle:
+                payload["launch_bundle"] = launch_bundle
+                payload["launch_bundle_scope"] = launch_bundle_scope
+                payload["remaining_part_ids"] = remaining_part_ids
         profile_dirname = registry["defaults"]["profile_dirname"]
         sp = scratchpad_path(root, profile_dirname, task_id)
         if sp.exists():
-            payload["scratchpad_path"] = str(sp)
+            payload["scratchpad_path"] = (
+                _compact_display_path(str(sp), state)
+                if verbosity == "compact"
+                else str(sp)
+            )
+    elif verbosity == "compact":
+        payload["summary"] = _compact_continuation_summary(
+            state.get("continuation", {}),
+            has_launch_bundle=False,
+        )
     return payload
 
 
