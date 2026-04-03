@@ -640,6 +640,20 @@ def tool_show_task(arguments: dict[str, Any]) -> dict[str, Any]:
     return make_text_result(json_text(payload), structured=payload)
 
 
+def tool_list_tasks(arguments: dict[str, Any]) -> dict[str, Any]:
+    registry = validate_registry_or_fail()
+    _workspace_root, _workspace_profile, _project_root, _project_profile, storage_root = resolve_task_context(
+        registry,
+        arguments,
+    )
+    payload = taskflow.list_tasks(
+        registry,
+        root=storage_root,
+        status_filter=arguments.get("status"),
+    )
+    return make_text_result(json_text(payload), structured=payload)
+
+
 def tool_confirm_task(arguments: dict[str, Any]) -> dict[str, Any]:
     registry = validate_registry_or_fail()
     _workspace_root, workspace_profile, _project_root, project_profile, storage_root = resolve_task_context(
@@ -1124,6 +1138,22 @@ TOOLS: dict[str, dict[str, Any]] = {
             "additionalProperties": False
         },
         "handler": tool_show_task,
+    },
+    "relaykit_list_tasks": {
+        "description": "List RelayKit tasks under the current workspace or project storage root, optionally filtered by status.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "workspace_root": {"type": "string"},
+                "project_root": {"type": "string"},
+                "workspace_profile": {"type": "string"},
+                "project_profile": {"type": "string"},
+                "task_scope": {"type": "string", "enum": ["workspace", "project"]},
+                "status": {"type": "array", "items": {"type": "string"}}
+            },
+            "additionalProperties": False
+        },
+        "handler": tool_list_tasks,
     },
     "relaykit_confirm_task": {
         "description": "Accept a RelayKit setup recommendation or request changes after clarification is complete.",

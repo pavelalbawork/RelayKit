@@ -151,6 +151,31 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
+def read_recent_jsonl(path: Path, limit: int) -> list[dict[str, Any]]:
+    if not path.exists() or limit <= 0:
+        return []
+    chunk_size = 8192
+    with path.open("rb") as handle:
+        handle.seek(0, 2)
+        position = handle.tell()
+        buffer = bytearray()
+        while position > 0 and buffer.count(b"\n") <= limit:
+            read_size = min(chunk_size, position)
+            position -= read_size
+            handle.seek(position)
+            buffer[:0] = handle.read(read_size)
+    lines = buffer.decode("utf-8").splitlines()
+    if position > 0 and lines:
+        lines = lines[1:]
+    rows: list[dict[str, Any]] = []
+    for line in lines[-limit:]:
+        line = line.strip()
+        if not line:
+            continue
+        rows.append(json.loads(line))
+    return rows
+
+
 def append_jsonl(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
@@ -260,6 +285,15 @@ def learning_log_path(root: Path, profile_dirname: str) -> Path:
 
 def learning_summary_path(root: Path, profile_dirname: str) -> Path:
     return root / profile_dirname / LEARNING_SUMMARY_FILENAME
+
+
+def _duration_label(delta: timedelta) -> str:
+    total_seconds = max(0, int(delta.total_seconds()))
+    hours, remainder = divmod(total_seconds, 3600)
+    mins, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours}h{mins:02d}m"
+    return f"{mins:02d}:{secs:02d}"
 
 
 def root_for_task(workspace_root: Path | None, project_root: Path | None, task_scope: str | None) -> Path:
@@ -1225,6 +1259,7 @@ def setup_recommendation(
 
 
 def part_reason(part: dict[str, Any], classification: dict[str, Any], host_name: str) -> str:
+    role = part.get("assignment", {}).get("role")
     if part["part_id"] == "frontend-build":
         return f"{host_name} is a better fit for browser-backed UI work than forcing frontend implementation into the main code lane."
     if part["part_id"] == "frontend-test":
@@ -1233,9 +1268,54 @@ def part_reason(part: dict[str, Any], classification: dict[str, Any], host_name:
         return f"{host_name} adds independent judgment without forcing a heavier review gate."
     if part["part_id"] == "research":
         return f"{host_name} can reduce uncertainty without blocking the main execution lane."
+    if role == "reviewer":
+        return f"{host_name} acts as the explicit review gate so execution and approval stay separated."
+    if role == "tester":
+        return f"{host_name} owns verification so execution can stay focused on implementation rather than re-checking itself."
+    if role == "researcher":
+        return f"{host_name} handles uncertainty reduction before more execution time is spent."
+    if role == "critic":
+        return f"{host_name} provides independent critique without taking over implementation ownership."
+    if role == "converger":
+        return f"{host_name} is being used to converge outputs and close the phase cleanly."
     if classification["task_type"] == "review-only":
         return f"{host_name} is being used as a pure review lane because the task does not require direct implementation ownership."
     return f"{host_name} is the best available fit for the main execution work under the current task constraints."
+
+
+def list_tasks(
+    registry: dict[str, Any],
+    *,
+    root: Path,
+    status_filter: list[str] | None = None,
+) -> dict[str, Any]:
+    profile_dirname = registry["defaults"]["profile_dirname"]
+    tasks_root = task_root(root, profile_dirname)
+    statuses = set(status_filter or [])
+    tasks: list[dict[str, Any]] = []
+    if tasks_root.exists():
+        for state_file in sorted(tasks_root.glob("*/state.json")):
+            state = read_json(state_file)
+            status = state.get("status", "unknown")
+            if statuses and status not in statuses:
+                continue
+            tasks.append(
+                {
+                    "task_id": state.get("task_id"),
+                    "status": status,
+                    "scope": state.get("scope"),
+                    "task": state.get("task", {}).get("original"),
+                    "current_phase_id": state.get("current_phase_id"),
+                    "updated_at": state.get("updated_at") or state.get("created_at"),
+                    "state_path": str(state_file),
+                }
+            )
+    return {
+        "count": len(tasks),
+        "tasks": tasks,
+        "status_filter": sorted(statuses),
+        "terminal_statuses": sorted(TERMINAL_STATUSES),
+    }
 
 
 def build_summary_markdown(state: dict[str, Any]) -> str:
@@ -1309,13 +1389,15 @@ def learned_tendencies(root: Path, registry: dict[str, Any]) -> dict[str, Any]:
 
 
 def generate_learning_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
+    recent_records = records[-20:]
     summary: dict[str, Any] = {
         "version": 1,
         "generated_at": now_iso(),
+        "lookback_count": len(recent_records),
         "archetypes": {},
         "suggestions": [],
     }
-    for record in records:
+    for record in recent_records:
         archetype = record.get("archetype", "custom")
         bucket = summary["archetypes"].setdefault(
             archetype,
@@ -1388,7 +1470,7 @@ def generate_learning_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
 
 def refresh_learning_summary(root: Path, registry: dict[str, Any]) -> dict[str, Any]:
     profile_dirname = registry["defaults"]["profile_dirname"]
-    records = read_jsonl(learning_log_path(root, profile_dirname))
+    records = read_recent_jsonl(learning_log_path(root, profile_dirname), 20)
     summary = generate_learning_summary(records)
     write_json(learning_summary_path(root, profile_dirname), summary)
     return summary
@@ -1701,13 +1783,13 @@ def apply_change_request(
 ) -> dict[str, Any]:
     lowered = change_text.lower()
     state.setdefault("manual_overrides", {})
-    if "solo" in lowered:
+    if re.search(r"\bsolo\b", lowered):
         state["manual_overrides"]["coordination"] = "solo"
-    if "coordinated" in lowered or "multi-tool" in lowered or "multiple tools" in lowered:
+    if re.search(r"\bcoordinated\b", lowered) or re.search(r"\bmulti-tool\b", lowered) or re.search(r"\bmultiple tools\b", lowered):
         state["manual_overrides"]["coordination"] = "coordinated"
-    if "lean" in lowered:
+    if re.search(r"\blean\b", lowered):
         state["manual_overrides"]["continuity"] = "lean"
-    if "full" in lowered:
+    if re.search(r"\bfull\b", lowered):
         state["manual_overrides"]["continuity"] = "full"
     parsed = parse_constraint_text(
         change_text,
@@ -1819,15 +1901,19 @@ def confirm_task(
 
 def infer_checkpoint_outcome(notes: str) -> str:
     lowered = notes.lower()
-    if any(token in lowered for token in ["failed", "unrecoverable", "give up", "fatal"]):
+    if re.search(r"\b(unrecoverable|fatal)\b", lowered):
         return "failed"
-    if any(token in lowered for token in ["abandon", "cancel", "scrap", "not worth"]):
+    if re.search(r"(^|[.!?\n]\s*)(failed\b|failure\b|gave up\b|giving up\b)", lowered):
+        return "failed"
+    if re.search(r"\b(abandon(?:ed)?|cancel(?:led)?|scrap(?:ped)?|not worth)\b", lowered):
         return "abandoned"
-    if any(token in lowered for token in ["blocked", "can't", "cannot", "stuck"]):
+    if re.search(r"\b(blocked|stuck)\b", lowered):
         return "blocked"
-    if any(token in lowered for token in ["reroute", "wrong tool", "bad fit"]):
+    if re.search(r"\b(can't proceed|cannot proceed|unable to continue|waiting on)\b", lowered):
+        return "blocked"
+    if re.search(r"\b(reroute|wrong tool|bad fit)\b", lowered):
         return "needs_reroute"
-    if any(token in lowered for token in ["next phase", "phase 2", "ready for next", "handoff complete"]):
+    if re.search(r"\b(next phase|phase 2|ready for next|handoff complete)\b", lowered):
         return "ready_for_next_phase"
     return "on_track"
 
@@ -2260,12 +2346,10 @@ def _build_timeline(state: dict[str, Any]) -> list[dict[str, str]]:
             entry["at"] = ts.isoformat()
             if base:
                 elapsed = ts - base
-                mins, secs = divmod(int(elapsed.total_seconds()), 60)
-                entry["elapsed"] = f"{mins:02d}:{secs:02d}"
+                entry["elapsed"] = _duration_label(elapsed)
             if prev and ts > prev:
                 gap = ts - prev
-                gap_mins, gap_secs = divmod(int(gap.total_seconds()), 60)
-                entry["since_prev"] = f"+{gap_mins:02d}:{gap_secs:02d}"
+                entry["since_prev"] = f"+{_duration_label(gap)}"
         prev = ts
         timeline.append(entry)
 
@@ -2273,14 +2357,12 @@ def _build_timeline(state: dict[str, Any]) -> list[dict[str, str]]:
     if base and state.get("status") not in TERMINAL_STATUSES:
         now = datetime.now(timezone.utc)
         total = now - base
-        mins, secs = divmod(int(total.total_seconds()), 60)
         since = ""
         if prev:
             gap = now - prev
-            g_mins, g_secs = divmod(int(gap.total_seconds()), 60)
-            since = f"+{g_mins:02d}:{g_secs:02d}"
+            since = f"+{_duration_label(gap)}"
         timeline.append({
-            "event": f"← now ({mins:02d}:{secs:02d} elapsed)",
+            "event": f"← now ({_duration_label(total)} elapsed)",
             "since_prev": since,
         })
 
@@ -2305,6 +2387,45 @@ def show_task(
         "current_phase": current_phase(state),
         "latest_checkpoint": latest_checkpoint_event(state),
         "timeline": _build_timeline(state),
+    }
+
+
+def build_handoff_card(state: dict[str, Any], part: dict[str, Any]) -> dict[str, Any]:
+    assignment = part["assignment"]
+    policy = part.get("checkpoint_policy", "gate")
+    stop_condition = "Checkpoint when you reach a concrete result, blocker, or setup-change signal."
+    if policy == "auto":
+        stop_condition = "Checkpoint automatically after a concrete result; do not wait for a human gate."
+    elif policy == "notify":
+        stop_condition = "Checkpoint after a concrete result and notify; no human gate is required to continue."
+    scratchpad = None
+    if state.get("storage_root"):
+        scratchpad = str(
+            scratchpad_path(
+                Path(state["storage_root"]),
+                state.get("profile_dirname") or ".relaykit",
+                state["task_id"],
+            )
+        )
+    return {
+        "task_id": state["task_id"],
+        "phase_id": state.get("current_phase_id"),
+        "part_id": part["part_id"],
+        "part_name": part["name"],
+        "role": assignment["role"],
+        "host": assignment["host"],
+        "model": assignment["model"],
+        "workspace_root": state.get("workspace_root"),
+        "project_root": state.get("project_root"),
+        "goal": part["objective"],
+        "task_summary": task_summary_text(state),
+        "scope_boundaries": state["task"].get("scope_boundaries") or "Not set.",
+        "definition_of_done": state["task"].get("definition_of_done") or "Not set.",
+        "verification_target": state["task"].get("verification") or "Not set.",
+        "remaining_uncertainty": state["task"].get("remaining_uncertainty") or "None noted.",
+        "stop_condition": stop_condition,
+        "scratchpad_path": scratchpad,
+        "stack_components": deepcopy(part.get("stack_components", [])),
     }
 
 
@@ -2424,6 +2545,7 @@ def render_prior_context(state: dict[str, Any], current_part_id: str) -> list[st
 
 def render_task_part_markdown(state: dict[str, Any], part: dict[str, Any]) -> str:
     assignment = part["assignment"]
+    handoff_card = build_handoff_card(state, part)
     lines = [
         f"# RelayKit Task Part: {part['name']}",
         "",
@@ -2482,6 +2604,14 @@ def render_task_part_markdown(state: dict[str, Any], part: dict[str, Any]) -> st
     lines.extend(
         [
             "",
+            "## Structured Handoff",
+            "",
+            "Use this machine-readable handoff card to confirm the receiving host has the required task context before starting:",
+            "",
+            "```json",
+            json.dumps(handoff_card, indent=2),
+            "```",
+            "",
             "## RelayKit Tools for This Phase",
             "",
             "During execution, use only these RelayKit tools:",
@@ -2538,6 +2668,7 @@ def render_task_part(
         },
         "scratchpad_path": str(sp) if sp.exists() else None,
         "prior_artifacts": collect_prior_artifacts(state, part_id),
+        "handoff_card": build_handoff_card(state, part),
     }
     return result
 
@@ -2603,6 +2734,7 @@ def reflect_task(
     summary = refresh_learning_summary(root, registry)
     state["reflection"].append(final_record)
     state["layers"]["learned_tendencies"] = summary
+    state["status"] = "reflected"
     state_file, summary_file = save_task_state(state, registry)
     payload.update(
         {

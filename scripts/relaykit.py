@@ -2738,6 +2738,25 @@ def command_show_task(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_list_tasks(args: argparse.Namespace) -> int:
+    registry = load_registry()
+    registry_issues = validate_registry(registry)
+    if registry_issues:
+        fail("registry validation failed", details=registry_issues)
+    _workspace_root, _workspace_profile, _project_root, _project_profile, storage_root = resolve_task_context(args, registry)
+    try:
+        payload = taskflow.list_tasks(
+            registry,
+            root=storage_root,
+            status_filter=args.status,
+        )
+    except ValueError as error:
+        message, details = taskflow.parse_failure(error)
+        fail(message, details=details)
+    print_taskflow_payload(payload)
+    return 0
+
+
 def command_confirm_task(args: argparse.Namespace) -> int:
     registry = load_registry()
     registry_issues = validate_registry(registry)
@@ -2942,6 +2961,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser_show_task.add_argument("--task-id", required=True)
     parser_show_task.add_argument("--debug", action="store_true")
     parser_show_task.set_defaults(func=command_show_task)
+
+    parser_list_tasks = subparsers.add_parser(
+        "list-tasks",
+        help="List RelayKit tasks under the current workspace or project storage root.",
+    )
+    add_task_context_arguments(parser_list_tasks)
+    parser_list_tasks.add_argument("--status", action="append", help="Filter by one or more task statuses.")
+    parser_list_tasks.set_defaults(func=command_list_tasks)
 
     parser_confirm_task = subparsers.add_parser(
         "confirm-task",
