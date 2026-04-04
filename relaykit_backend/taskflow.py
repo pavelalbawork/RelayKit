@@ -9,10 +9,11 @@ import secrets
 from typing import Any
 
 from . import git as git_module
+from relaykit_runtime.layout import runtime_root
 
 
 TASKFLOW_VERSION = 1
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = runtime_root()
 TASKS_DIRNAME = "tasks"
 LEARNING_LOG_FILENAME = "learning-log.jsonl"
 LEARNING_SUMMARY_FILENAME = "learned-tendencies.json"

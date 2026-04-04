@@ -1,0 +1,810 @@
+{
+  "defaults": {
+    "profile_dirname": ".relaykit",
+    "workspace_profile_filename": "workspace-profile.json",
+    "project_profile_filename": "project-profile.json",
+    "default_preset": "balanced-default",
+    "default_personas": [],
+    "persona_mode": "optional-addon"
+  },
+  "skills": {
+    "orchestrator": {
+      "path": "skills/relaykit-orchestrator/SKILL.md",
+      "default_role": "orchestrator",
+      "default_capabilities": [
+        "planning",
+        "routing",
+        "convergence"
+      ]
+    },
+    "contributor": {
+      "path": "skills/relaykit-contributor/SKILL.md",
+      "default_role": "builder",
+      "default_capabilities": [
+        "implementation",
+        "repo_edit",
+        "verification"
+      ]
+    },
+    "critic": {
+      "path": "skills/relaykit-critic/SKILL.md",
+      "default_role": "critic",
+      "default_capabilities": [
+        "critique",
+        "review"
+      ]
+    },
+    "tester": {
+      "path": "skills/relaykit-tester/SKILL.md",
+      "default_role": "tester",
+      "default_capabilities": [
+        "verification",
+        "browser",
+        "runtime_debug"
+      ]
+    },
+    "reviewer": {
+      "path": "skills/relaykit-reviewer/SKILL.md",
+      "default_role": "reviewer",
+      "default_capabilities": [
+        "review",
+        "gatekeeping",
+        "verification"
+      ]
+    },
+    "researcher": {
+      "path": "skills/relaykit-researcher/SKILL.md",
+      "default_role": "researcher",
+      "default_capabilities": [
+        "research",
+        "evidence",
+        "synthesis"
+      ]
+    },
+    "converger": {
+      "path": "skills/relaykit-converger/SKILL.md",
+      "default_role": "converger",
+      "default_capabilities": [
+        "convergence",
+        "comparison",
+        "decision_support"
+      ]
+    }
+  },
+  "skillpacks": {
+    "portable-default": {
+      "description": "RelayKit entry skill plus the full cross-role pack for file-based skill hosts.",
+      "entry_skill": "relaykit",
+      "skills": [
+        "relaykit",
+        "relaykit-orchestrator",
+        "relaykit-contributor",
+        "relaykit-critic",
+        "relaykit-tester",
+        "relaykit-reviewer",
+        "relaykit-researcher",
+        "relaykit-converger"
+      ],
+      "recommended_for": [
+        "codex",
+        "claude-code",
+        "generic-file-skill-hosts"
+      ]
+    },
+    "lean-core": {
+      "description": "Small default pack with the entry skill plus the most common orchestration and execution roles.",
+      "entry_skill": "relaykit",
+      "skills": [
+        "relaykit",
+        "relaykit-orchestrator",
+        "relaykit-contributor",
+        "relaykit-critic"
+      ],
+      "recommended_for": [
+        "small-workspaces",
+        "single-project-use",
+        "quick-evaluation"
+      ]
+    }
+  },
+  "hosts": {
+    "codex": {
+      "path": "host-guides/codex.md",
+      "supports_reasoning_effort": true,
+      "default_models": [
+        "gpt-5.4",
+        "gpt-5.4-mini"
+      ]
+    },
+    "claude-code": {
+      "path": "host-guides/claude-code.md",
+      "supports_reasoning_effort": false,
+      "default_models": [
+        "opus-4.6",
+        "sonnet-4.6"
+      ]
+    },
+    "antigravity": {
+      "path": "host-guides/antigravity.md",
+      "supports_reasoning_effort": false,
+      "default_models": [
+        "gemini-3.1-pro",
+        "gemini-3.1-flash",
+        "opus-4.6",
+        "sonnet-4.6"
+      ]
+    },
+    "gemini-cli": {
+      "path": "host-guides/gemini-cli.md",
+      "supports_reasoning_effort": false,
+      "default_models": [
+        "gemini-3.1-pro",
+        "gemini-3.1-flash"
+      ]
+    }
+  },
+  "models": {
+    "gpt-5.4": {
+      "path": "model-notes/gpt-5.4.md",
+      "hosts": [
+        "codex"
+      ]
+    },
+    "gpt-5.4-mini": {
+      "path": "model-notes/gpt-5.4-mini.md",
+      "hosts": [
+        "codex"
+      ]
+    },
+    "opus-4.6": {
+      "path": "model-notes/opus-4.6.md",
+      "hosts": [
+        "claude-code",
+        "antigravity"
+      ]
+    },
+    "sonnet-4.6": {
+      "path": "model-notes/sonnet-4.6.md",
+      "hosts": [
+        "claude-code",
+        "antigravity"
+      ]
+    },
+    "gemini-3.1-pro": {
+      "path": "model-notes/gemini-3.1-pro.md",
+      "hosts": [
+        "antigravity",
+        "gemini-cli"
+      ]
+    },
+    "gemini-3.1-flash": {
+      "path": "model-notes/gemini-3.1-flash.md",
+      "hosts": [
+        "antigravity",
+        "gemini-cli"
+      ]
+    }
+  },
+  "personas": {
+    "pragmatic-builder": {
+      "path": "personas/pragmatic-builder.md",
+      "name": "Pragmatic Builder",
+      "summary": "Biases a lane toward practical delivery, tight scope, and evidence-backed implementation choices.",
+      "kind": "hybrid",
+      "tier": "recommended",
+      "activation": "optional-addon",
+      "compatible_roles": [
+        "builder",
+        "tester",
+        "orchestrator"
+      ],
+      "compatible_hosts": [
+        "codex",
+        "claude-code",
+        "antigravity",
+        "gemini-cli"
+      ],
+      "token_cost": "low",
+      "conflicts_with": [
+        "stern-architect"
+      ],
+      "load_order": 40,
+      "source": "built-in"
+    },
+    "stern-architect": {
+      "path": "personas/stern-architect.md",
+      "name": "Stern Architect",
+      "summary": "Pushes a lane toward clearer tradeoffs, stronger boundaries, and harder architectural scrutiny.",
+      "kind": "style",
+      "tier": "recommended",
+      "activation": "optional-addon",
+      "compatible_roles": [
+        "orchestrator",
+        "planner",
+        "critic",
+        "reviewer"
+      ],
+      "compatible_hosts": [
+        "codex",
+        "claude-code",
+        "antigravity",
+        "gemini-cli"
+      ],
+      "token_cost": "medium",
+      "conflicts_with": [
+        "pragmatic-builder"
+      ],
+      "load_order": 50,
+      "source": "built-in"
+    },
+    "startup-cto": {
+      "path": "personas/startup-cto.md",
+      "name": "Startup CTO",
+      "summary": "Adds early-stage technical judgment with bias toward reversible decisions, boring infrastructure, and fast learning loops.",
+      "kind": "hybrid",
+      "tier": "optional",
+      "activation": "optional-addon",
+      "compatible_roles": [
+        "orchestrator",
+        "builder",
+        "critic",
+        "reviewer"
+      ],
+      "compatible_hosts": [
+        "codex",
+        "claude-code",
+        "antigravity",
+        "gemini-cli"
+      ],
+      "token_cost": "low",
+      "conflicts_with": [
+        "lean-founder"
+      ],
+      "load_order": 45,
+      "source": "rewrite:alirezarezvani/claude-skills:agents/personas/startup-cto.md"
+    },
+    "lean-founder": {
+      "path": "personas/lean-founder.md",
+      "name": "Lean Founder",
+      "summary": "Adds wedge-first scoping, validation pressure, and opportunity-cost discipline to strategy and build lanes.",
+      "kind": "hybrid",
+      "tier": "optional",
+      "activation": "optional-addon",
+      "compatible_roles": [
+        "orchestrator",
+        "builder",
+        "critic",
+        "researcher"
+      ],
+      "compatible_hosts": [
+        "codex",
+        "claude-code",
+        "antigravity",
+        "gemini-cli"
+      ],
+      "token_cost": "low",
+      "conflicts_with": [
+        "startup-cto"
+      ],
+      "load_order": 46,
+      "source": "rewrite:alirezarezvani/claude-skills:agents/personas/solo-founder.md"
+    },
+    "demand-rigor": {
+      "path": "personas/demand-rigor.md",
+      "name": "Demand Rigor",
+      "summary": "Adds harder questions, clearer tradeoff pressure, and less polite agreement to planning and research lanes.",
+      "kind": "style",
+      "tier": "optional",
+      "activation": "optional-addon",
+      "compatible_roles": [
+        "researcher",
+        "critic",
+        "orchestrator",
+        "reviewer"
+      ],
+      "compatible_hosts": [
+        "codex",
+        "claude-code",
+        "antigravity",
+        "gemini-cli"
+      ],
+      "token_cost": "low",
+      "conflicts_with": [],
+      "load_order": 52,
+      "source": "rewrite:garrytan/gstack:office-hours/SKILL.md+plan-ceo-review/SKILL.md"
+    },
+    "reality-checker": {
+      "path": "personas/reality-checker.md",
+      "name": "Reality Checker",
+      "summary": "Adds skeptical evidence-first pressure to review and verification lanes, defaulting to proof over optimism.",
+      "kind": "hybrid",
+      "tier": "recommended",
+      "activation": "optional-addon",
+      "compatible_roles": [
+        "tester",
+        "reviewer",
+        "critic"
+      ],
+      "compatible_hosts": [
+        "codex",
+        "claude-code",
+        "antigravity",
+        "gemini-cli"
+      ],
+      "token_cost": "low",
+      "conflicts_with": [],
+      "load_order": 55,
+      "source": "rewrite:msitarzewski/agency-agents:testing/testing-reality-checker.md"
+    },
+    "design-critic": {
+      "path": "personas/design-critic.md",
+      "name": "Design Critic",
+      "summary": "Adds sharper hierarchy, interaction, and anti-slop pressure to frontend and design-review lanes.",
+      "kind": "expertise",
+      "tier": "recommended",
+      "activation": "optional-addon",
+      "compatible_roles": [
+        "critic",
+        "reviewer",
+        "tester",
+        "builder"
+      ],
+      "compatible_hosts": [
+        "codex",
+        "claude-code",
+        "antigravity",
+        "gemini-cli"
+      ],
+      "token_cost": "medium",
+      "conflicts_with": [],
+      "load_order": 65,
+      "source": "rewrite:garrytan/gstack:design-review/SKILL.md+plan-design-review/SKILL.md"
+    }
+  },
+  "presets": {
+    "balanced-default": {
+      "intent": "Strong planning and critique with fast execution",
+      "cost_posture": "balanced",
+      "lanes": {
+        "orchestrator": {
+          "skill": "orchestrator",
+          "role": "orchestrator",
+          "host": "claude-code",
+          "model": "opus-4.6",
+          "capabilities": [
+            "planning",
+            "routing",
+            "convergence"
+          ],
+          "credit_pool": "anthropic",
+          "personas": []
+        },
+        "builder": {
+          "skill": "contributor",
+          "role": "builder",
+          "host": "codex",
+          "model": "gpt-5.4",
+          "reasoning_effort": "high",
+          "capabilities": [
+            "implementation",
+            "repo_edit",
+            "verification"
+          ],
+          "credit_pool": "openai",
+          "personas": []
+        },
+        "critic": {
+          "skill": "critic",
+          "role": "critic",
+          "host": "claude-code",
+          "model": "sonnet-4.6",
+          "capabilities": [
+            "critique",
+            "review"
+          ],
+          "credit_pool": "anthropic",
+          "personas": []
+        },
+        "frontend-builder": {
+          "skill": "contributor",
+          "role": "builder",
+          "host": "antigravity",
+          "model": "gemini-3.1-pro",
+          "capabilities": [
+            "frontend",
+            "design",
+            "implementation",
+            "browser"
+          ],
+          "credit_pool": "antigravity",
+          "personas": [
+            "design-critic"
+          ]
+        },
+        "frontend-tester": {
+          "skill": "tester",
+          "role": "tester",
+          "host": "antigravity",
+          "model": "gemini-3.1-flash",
+          "capabilities": [
+            "browser",
+            "verification",
+            "frontend"
+          ],
+          "credit_pool": "antigravity",
+          "personas": [
+            "reality-checker"
+          ]
+        },
+        "overflow": {
+          "skill": "contributor",
+          "role": "builder",
+          "host": "gemini-cli",
+          "model": "gemini-3.1-flash",
+          "capabilities": [
+            "implementation",
+            "docs",
+            "verification"
+          ],
+          "credit_pool": "google",
+          "personas": []
+        }
+      }
+    },
+    "claude-led": {
+      "intent": "Stronger planning, framing, critique, and convergence bias",
+      "cost_posture": "premium-heavy",
+      "lanes": {
+        "orchestrator": {
+          "skill": "orchestrator",
+          "role": "orchestrator",
+          "host": "claude-code",
+          "model": "opus-4.6",
+          "capabilities": [
+            "planning",
+            "routing",
+            "convergence"
+          ],
+          "credit_pool": "anthropic",
+          "personas": [
+            "stern-architect"
+          ]
+        },
+        "planner": {
+          "skill": "orchestrator",
+          "role": "planner",
+          "host": "claude-code",
+          "model": "opus-4.6",
+          "capabilities": [
+            "planning",
+            "research"
+          ],
+          "credit_pool": "anthropic",
+          "personas": [
+            "stern-architect"
+          ]
+        },
+        "builder": {
+          "skill": "contributor",
+          "role": "builder",
+          "host": "codex",
+          "model": "gpt-5.4",
+          "reasoning_effort": "high",
+          "capabilities": [
+            "implementation",
+            "repo_edit",
+            "verification"
+          ],
+          "credit_pool": "openai",
+          "personas": [
+            "pragmatic-builder"
+          ]
+        },
+        "critic": {
+          "skill": "critic",
+          "role": "critic",
+          "host": "claude-code",
+          "model": "sonnet-4.6",
+          "capabilities": [
+            "critique",
+            "review"
+          ],
+          "credit_pool": "anthropic",
+          "personas": [
+            "stern-architect",
+            "demand-rigor"
+          ]
+        }
+      }
+    },
+    "codex-led": {
+      "intent": "Keep orchestration and execution close to the repo-edit lane",
+      "cost_posture": "execution-heavy",
+      "lanes": {
+        "orchestrator": {
+          "skill": "orchestrator",
+          "role": "orchestrator",
+          "host": "codex",
+          "model": "gpt-5.4",
+          "reasoning_effort": "high",
+          "capabilities": [
+            "planning",
+            "routing",
+            "repo_edit"
+          ],
+          "credit_pool": "openai",
+          "personas": [
+            "pragmatic-builder"
+          ]
+        },
+        "builder": {
+          "skill": "contributor",
+          "role": "builder",
+          "host": "codex",
+          "model": "gpt-5.4",
+          "reasoning_effort": "high",
+          "capabilities": [
+            "implementation",
+            "repo_edit",
+            "verification"
+          ],
+          "credit_pool": "openai",
+          "personas": [
+            "pragmatic-builder"
+          ]
+        },
+        "critic": {
+          "skill": "critic",
+          "role": "critic",
+          "host": "claude-code",
+          "model": "sonnet-4.6",
+          "capabilities": [
+            "critique",
+            "review"
+          ],
+          "credit_pool": "anthropic",
+          "personas": [
+            "reality-checker"
+          ]
+        },
+        "frontend-builder": {
+          "skill": "contributor",
+          "role": "builder",
+          "host": "antigravity",
+          "model": "gemini-3.1-pro",
+          "capabilities": [
+            "frontend",
+            "browser",
+            "implementation"
+          ],
+          "credit_pool": "antigravity",
+          "personas": [
+            "design-critic"
+          ]
+        },
+        "frontend-tester": {
+          "skill": "tester",
+          "role": "tester",
+          "host": "antigravity",
+          "model": "gemini-3.1-flash",
+          "capabilities": [
+            "browser",
+            "verification",
+            "frontend"
+          ],
+          "credit_pool": "antigravity",
+          "personas": [
+            "reality-checker"
+          ]
+        }
+      }
+    },
+    "frontend-heavy": {
+      "intent": "Prioritize browser-backed design, iteration, and UI verification",
+      "cost_posture": "mixed",
+      "lanes": {
+        "orchestrator": {
+          "skill": "orchestrator",
+          "role": "orchestrator",
+          "host": "claude-code",
+          "model": "sonnet-4.6",
+          "capabilities": [
+            "planning",
+            "routing",
+            "frontend"
+          ],
+          "credit_pool": "anthropic",
+          "personas": []
+        },
+        "frontend-builder": {
+          "skill": "contributor",
+          "role": "builder",
+          "host": "antigravity",
+          "model": "gemini-3.1-pro",
+          "capabilities": [
+            "frontend",
+            "browser",
+            "design",
+            "implementation"
+          ],
+          "credit_pool": "antigravity",
+          "personas": [
+            "design-critic"
+          ]
+        },
+        "frontend-tester": {
+          "skill": "tester",
+          "role": "tester",
+          "host": "antigravity",
+          "model": "gemini-3.1-flash",
+          "capabilities": [
+            "browser",
+            "verification",
+            "frontend"
+          ],
+          "credit_pool": "antigravity",
+          "personas": [
+            "reality-checker"
+          ]
+        },
+        "overflow-frontend": {
+          "skill": "contributor",
+          "role": "builder",
+          "host": "gemini-cli",
+          "model": "gemini-3.1-flash",
+          "capabilities": [
+            "frontend",
+            "docs",
+            "verification"
+          ],
+          "credit_pool": "google",
+          "personas": []
+        }
+      }
+    },
+    "cost-aware": {
+      "intent": "Preserve premium credits while keeping parallel options open",
+      "cost_posture": "conservative",
+      "lanes": {
+        "orchestrator": {
+          "skill": "orchestrator",
+          "role": "orchestrator",
+          "host": "claude-code",
+          "model": "sonnet-4.6",
+          "capabilities": [
+            "planning",
+            "routing",
+            "convergence"
+          ],
+          "credit_pool": "anthropic",
+          "personas": []
+        },
+        "builder": {
+          "skill": "contributor",
+          "role": "builder",
+          "host": "codex",
+          "model": "gpt-5.4-mini",
+          "reasoning_effort": "medium",
+          "capabilities": [
+            "implementation",
+            "repo_edit",
+            "verification"
+          ],
+          "credit_pool": "openai",
+          "personas": [
+            "pragmatic-builder"
+          ]
+        },
+        "critic": {
+          "skill": "critic",
+          "role": "critic",
+          "host": "claude-code",
+          "model": "sonnet-4.6",
+          "capabilities": [
+            "critique",
+            "review"
+          ],
+          "credit_pool": "anthropic",
+          "personas": []
+        },
+        "overflow": {
+          "skill": "contributor",
+          "role": "builder",
+          "host": "gemini-cli",
+          "model": "gemini-3.1-flash",
+          "capabilities": [
+            "implementation",
+            "docs",
+            "verification"
+          ],
+          "credit_pool": "google",
+          "personas": []
+        }
+      }
+    },
+    "reality-gate": {
+      "intent": "Increase skepticism and explicit review gates for risky changes",
+      "cost_posture": "premium-heavy",
+      "lanes": {
+        "orchestrator": {
+          "skill": "orchestrator",
+          "role": "orchestrator",
+          "host": "claude-code",
+          "model": "sonnet-4.6",
+          "capabilities": [
+            "planning",
+            "routing",
+            "convergence"
+          ],
+          "credit_pool": "anthropic",
+          "personas": []
+        },
+        "builder": {
+          "skill": "contributor",
+          "role": "builder",
+          "host": "codex",
+          "model": "gpt-5.4",
+          "reasoning_effort": "high",
+          "capabilities": [
+            "implementation",
+            "repo_edit",
+            "verification"
+          ],
+          "credit_pool": "openai",
+          "personas": [
+            "pragmatic-builder"
+          ]
+        },
+        "critic": {
+          "skill": "critic",
+          "role": "critic",
+          "host": "claude-code",
+          "model": "sonnet-4.6",
+          "capabilities": [
+            "critique",
+            "review"
+          ],
+          "credit_pool": "anthropic",
+          "personas": [
+            "demand-rigor"
+          ]
+        },
+        "reviewer": {
+          "skill": "reviewer",
+          "role": "reviewer",
+          "host": "claude-code",
+          "model": "sonnet-4.6",
+          "capabilities": [
+            "review",
+            "gatekeeping",
+            "verification"
+          ],
+          "credit_pool": "anthropic",
+          "personas": [
+            "reality-checker"
+          ]
+        },
+        "tester": {
+          "skill": "tester",
+          "role": "tester",
+          "host": "antigravity",
+          "model": "gemini-3.1-flash",
+          "capabilities": [
+            "browser",
+            "verification",
+            "runtime_debug"
+          ],
+          "credit_pool": "antigravity",
+          "personas": [
+            "reality-checker"
+          ]
+        }
+      }
+    },
+    "custom": {
+      "intent": "Explicit project or packet-specific topology",
+      "cost_posture": "variable",
+      "lanes": {}
+    }
+  }
+}

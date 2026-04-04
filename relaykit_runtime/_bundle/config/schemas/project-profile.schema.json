@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RelayKit Project Profile",
+  "type": "object",
+  "required": [
+    "version",
+    "kind",
+    "project_name",
+    "inherits_workspace_defaults",
+    "default_personas",
+    "lane_overrides"
+  ],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "kind": {
+      "const": "project-profile"
+    },
+    "project_name": {
+      "type": "string"
+    },
+    "inherits_workspace_defaults": {
+      "type": "boolean"
+    },
+    "preset": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "default_personas": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "lane_overrides": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/laneOverride"
+      }
+    },
+    "git_integration": {
+      "type": "boolean",
+      "description": "Override workspace git_integration setting for this project."
+    },
+    "notes": {
+      "type": "string"
+    }
+  },
+  "$defs": {
+    "laneOverride": {
+      "type": "object",
+      "properties": {
+        "skill": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string"
+        },
+        "host": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "reasoning_effort": {
+          "type": "string"
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "credit_pool": {
+          "type": "string"
+        },
+        "personas": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

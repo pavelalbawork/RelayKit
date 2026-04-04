@@ -13,12 +13,14 @@ import subprocess
 import sys
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
+SOURCE_ROOT = Path(__file__).resolve().parents[1]
+if str(SOURCE_ROOT) not in sys.path:
+    sys.path.insert(0, str(SOURCE_ROOT))
 
 from relaykit_backend import taskflow
+from relaykit_runtime.layout import runtime_root
 
+REPO_ROOT = runtime_root()
 REGISTRY_PATH = REPO_ROOT / "config" / "registry.json"
 SCHEMA_ROOT = REPO_ROOT / "config" / "schemas"
 VERSION = "0.3.0"
@@ -2992,10 +2994,10 @@ def build_install_self_payload(
         )
         return completed
 
-    install_result = run_install([str(python), "-m", "pip", "install", "-e", str(REPO_ROOT)])
+    install_result = run_install([str(python), "-m", "pip", "install", "-e", str(SOURCE_ROOT)])
     if install_result.returncode != 0:
         run_install([str(python), "-m", "pip", "install", "--upgrade", "pip"])
-        install_result = run_install([str(python), "-m", "pip", "install", "-e", str(REPO_ROOT)])
+        install_result = run_install([str(python), "-m", "pip", "install", "-e", str(SOURCE_ROOT)])
         if install_result.returncode != 0:
             fail("install-self failed", details=[json.dumps(install_steps[-1], indent=2)])
     payload = {
@@ -3882,7 +3884,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  relaykit install-self --venv /tmp/relaykit-demo/.venv --host codex"
         ),
     )
-    parser_install_self.add_argument("--venv", default=str(REPO_ROOT / ".venv"))
+    parser_install_self.add_argument("--venv", default=str(SOURCE_ROOT / ".venv"))
     parser_install_self.add_argument("--host", action="append")
     parser_install_self.add_argument(
         "--current-host",

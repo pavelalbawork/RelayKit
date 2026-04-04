@@ -29,4 +29,7 @@ relaykit-mcp = "mcp.relaykit.server:main"
 include-package-data = true
 
 [tool.setuptools.packages.find]
-include = ["relaykit_backend", "scripts", "mcp", "mcp.relaykit"]
+include = ["relaykit_backend", "relaykit_runtime", "scripts", "mcp", "mcp.relaykit"]
+
+[tool.setuptools.package-data]
+relaykit_runtime = ["_bundle/**/*"]
