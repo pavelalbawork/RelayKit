@@ -133,6 +133,17 @@ relaykit start-task --workspace-root . --task "Build the login page"
 
 Lifecycle commands now default to a concise human-readable view in an interactive terminal. Use `--format json` when you want the raw machine payload for scripting or debugging.
 
+If you want the guided shell version instead of stepping through individual commands, use:
+
+```bash
+relaykit run --workspace-root . --task "Build the login page"
+```
+
+RelayKit now makes the preflight verdict explicit in recommendations:
+- `manual` means the task is probably too small for protocol overhead
+- `lean` means a light protocol path is worth it
+- `full` means durable continuity or a research lane is justified
+
 Answer clarification questions until you get a recommendation:
 
 ```bash

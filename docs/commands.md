@@ -6,6 +6,7 @@ Task lifecycle commands default to `--format auto`, which means a concise human-
 
 | Command | Purpose |
 |---|---|
+| `run` | Guided interactive shell for intake, clarification, recommendation, and confirmation |
 | `start-task` | Begin a new multi-harness task from free text |
 | `answer-task` | Answer a clarification question |
 | `confirm-task` | Accept or modify the recommended lane setup |
@@ -56,6 +57,13 @@ Task lifecycle commands default to `--format auto`, which means a concise human-
 These bypass the intake flow. Use them only when you already know the exact lane assignment.
 
 ## Common Workflows
+
+**Guided shell flow:**
+```bash
+relaykit run --workspace-root . --task "Fix the auth bug"
+```
+
+`run` is the easiest human-first entrypoint. It walks clarifications interactively, prints the verdict (`manual`, `lean`, or `full`), and then confirms or revises the setup without making you chain commands manually.
 
 **Simple solo task:**
 ```bash

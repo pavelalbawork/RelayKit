@@ -1194,6 +1194,7 @@ def _delivery_mode_recommendation(
         complexity=complexity,
     ):
         return {
+            "verdict": "manual",
             "recommended": "manual",
             "protocol_setup": setup_name,
             "gate_required": True,
@@ -1207,6 +1208,7 @@ def _delivery_mode_recommendation(
     else:
         reason = "RelayKit is light enough here and keeps the task durable without extra coordination overhead."
     return {
+        "verdict": continuity,
         "recommended": "relaykit",
         "protocol_setup": setup_name,
         "gate_required": False,
@@ -1526,16 +1528,18 @@ def list_tasks(
     tasks: list[dict[str, Any]] = []
     if tasks_root.exists():
         for state_file in sorted(tasks_root.glob("*/state.json")):
-            state = read_json(state_file)
+            state = _normalize_legacy_state(read_json(state_file), registry)
             status = state.get("status", "unknown")
             if statuses and status not in statuses:
                 continue
+            task_payload = state.get("task")
+            task_summary = task_payload.get("original") if isinstance(task_payload, dict) else task_payload
             tasks.append(
                 {
                     "task_id": state.get("task_id"),
                     "status": status,
                     "scope": state.get("scope"),
-                    "task": state.get("task", {}).get("original"),
+                    "task": task_summary,
                     "current_phase_id": state.get("current_phase_id"),
                     "updated_at": state.get("updated_at") or state.get("created_at"),
                     "state_path": str(state_file),
@@ -1604,12 +1608,173 @@ def save_task_state(state: dict[str, Any], registry: dict[str, Any]) -> tuple[Pa
     return state_file, summary_file
 
 
+def _normalize_legacy_part(part: dict[str, Any]) -> dict[str, Any]:
+    if "assignment" in part:
+        return deepcopy(part)
+    assignment = {
+        "skill": part.get("skill") or ROLE_TO_SKILL.get(part.get("role", ""), "contributor"),
+        "role": part.get("role", "builder"),
+        "host": part.get("host", "codex"),
+        "model": part.get("model", "gpt-5.4"),
+        "reasoning_effort": part.get("reasoning_effort"),
+        "credit_pool": part.get("credit_pool"),
+        "persona": (part.get("personas") or [None])[0],
+    }
+    normalized = {
+        "part_id": part.get("part_id") or slugify(part.get("role") or "part"),
+        "name": part.get("part_id") or part.get("role") or "part",
+        "objective": part.get("objective") or "Continue the bounded task work.",
+        "assignment": assignment,
+        "checkpoint_policy": part.get("checkpoint_policy") or _default_checkpoint_policy(assignment["role"]),
+        "reason": part.get("reason") or f"{assignment['host']} is assigned to this legacy task part.",
+        "prompt_stack": part.get("prompt_stack") or [],
+        "stack_components": part.get("stack_components") or [],
+    }
+    return normalized
+
+
+def _normalize_legacy_state(state: dict[str, Any], registry: dict[str, Any]) -> dict[str, Any]:
+    if isinstance(state.get("task"), str):
+        original_task = state["task"]
+        legacy_parts = state.get("task_parts") or []
+        first_part = legacy_parts[0] if legacy_parts else {}
+        state["task"] = {
+            "original": original_task,
+            "clarified_summary": original_task,
+            "scope_boundaries": None,
+            "non_goals": first_part.get("excluded_scope"),
+            "definition_of_done": None,
+            "verification": first_part.get("verification_target"),
+            "remaining_uncertainty": None,
+            "constraints_text": None,
+            "parsed_constraints": None,
+        }
+    state.setdefault("version", 0)
+    state.setdefault("profile_dirname", registry["defaults"]["profile_dirname"])
+    state.setdefault("updated_at", state.get("created_at"))
+    state.setdefault("scope", "project" if state.get("project_root") else "workspace")
+    state.setdefault("storage_root", str(Path(state.get("project_root") or state.get("workspace_root") or ".")))
+    state.setdefault("inventory", {
+        "workspace_available_hosts": [],
+        "workspace_models_by_host": {},
+        "allowed_hosts": [],
+        "effective_hosts": [],
+        "effective_models_by_host": {},
+        "needs_task_inventory": False,
+        "budget_posture": "balanced",
+    })
+    state.setdefault("layers", {
+        "defaults": {},
+        "task_constraints": {},
+        "learned_tendencies": {"version": 1, "generated_at": None, "suggestions": [], "archetypes": {}},
+    })
+    state.setdefault("clarification", {"skipped": True, "question_cap": 6, "questions": []})
+    state.setdefault("classification", None)
+    state.setdefault("recommendation", None)
+    state.setdefault("confirmed_plan", None)
+    if isinstance(state.get("reflection"), dict):
+        state["reflection"] = [state["reflection"]]
+    state.setdefault("reflection", [])
+    state.setdefault("continuation", {})
+    state.setdefault("execution_context", None)
+    legacy_parts = [_normalize_legacy_part(part) for part in state.pop("task_parts", [])]
+    legacy_checkpoints = state.pop("checkpoints", [])
+    if not state.get("phases") and legacy_parts:
+        setup = {
+            "coordination": state.pop("coordination", "solo"),
+            "continuity": state.pop("continuity", "lean"),
+            "why_this_is_enough": "",
+            "why_not_simpler": "",
+        }
+        history: list[dict[str, Any]] = []
+        for index, checkpoint in enumerate(legacy_checkpoints, start=1):
+            history.append(
+                {
+                    "checkpoint_id": checkpoint.get("checkpoint_id") or f"legacy-checkpoint-{index:02d}",
+                    "at": checkpoint.get("timestamp"),
+                    "notes": checkpoint.get("notes", ""),
+                    "recommended_outcome": checkpoint.get("outcome") or "on_track",
+                    "recommended_action": checkpoint.get("recommended_action"),
+                }
+            )
+        phase_id = state.get("current_phase_id") or "phase-01"
+        state["phases"] = [
+            {
+                "phase_id": phase_id,
+                "created_at": state.get("created_at"),
+                "label": "legacy imported phase",
+                "status": "complete" if state.get("status") in TERMINAL_STATUSES else "active",
+                "setup": setup,
+                "task_parts": legacy_parts,
+                "change_reason": "none",
+                "entry_action": "legacy_import",
+                "history": history,
+            }
+        ]
+        state["current_phase_id"] = phase_id
+        legacy_recommendation = {
+            "task_summary": state["task"]["original"],
+            "archetype": {
+                "value": state.pop("archetype", "custom"),
+                "confidence": state.pop("confidence", "unknown"),
+            },
+            "setup": deepcopy(setup),
+            "confidence": {
+                "level": state.get("classification", {}).get("confidence") if isinstance(state.get("classification"), dict) else "unknown",
+                "main_uncertainty": None,
+            },
+            "overhead": {
+                "coordination": "low" if len(legacy_parts) <= 1 else "medium",
+                "model_cost": max((TOOL_COST.get(part["assignment"]["model"], "medium") for part in legacy_parts), default="medium"),
+                "context_transfer": "low" if setup["coordination"] == "solo" else "medium",
+            },
+            "task_parts": deepcopy(legacy_parts),
+            "research": {"mode": "none", "summary": ""},
+            "delivery_mode": {
+                "verdict": setup["continuity"],
+                "recommended": "relaykit",
+                "protocol_setup": f"{setup['coordination']}+{setup['continuity']}",
+                "gate_required": False,
+                "reason": "Imported from a legacy RelayKit task state.",
+                "override_hint": "",
+            },
+            "notable_exclusions": [],
+            "next_step": "Inspect the imported task state and continue with the next concrete action.",
+            "confirm_prompt": "",
+            "internal_preset": "legacy-import",
+            "learned_influence": {
+                "preferred_setup": None,
+                "applied_setup": False,
+                "prior_task_count": 0,
+                "reasoning": ["Imported from a legacy task state."],
+            },
+        }
+        if state.get("recommendation") is None:
+            state["recommendation"] = deepcopy(legacy_recommendation)
+        if state.get("confirmed_plan") is None:
+            state["confirmed_plan"] = deepcopy(legacy_recommendation)
+    else:
+        state.setdefault("phases", [])
+        state.setdefault("current_phase_id", None)
+    if not state.get("continuation"):
+        task_id = state.get("task_id", "<id>")
+        state["continuation"] = {
+            "current_state": "This task was loaded from a legacy state file.",
+            "next_best_action": "Inspect the task and decide whether to continue, reflect, or archive it.",
+            "optional_parallel_follow_up": "",
+            "safe_stop_point": "You can stop after reviewing the imported state.",
+            "resume_instructions": f"Run `relaykit.py resume-task --task-id {task_id}` to continue.",
+        }
+    return state
+
+
 def load_task_state(task_id: str, root: Path, registry: dict[str, Any]) -> dict[str, Any]:
     profile_dirname = registry["defaults"]["profile_dirname"]
     path = state_path(root, profile_dirname, task_id)
     if not path.exists():
         fail(f"task `{task_id}` is missing at `{path}`")
-    return read_json(path)
+    state = read_json(path)
+    return _normalize_legacy_state(state, registry)
 
 
 def learned_tendencies(root: Path, registry: dict[str, Any]) -> dict[str, Any]:
@@ -2995,6 +3160,14 @@ def _build_timeline(state: dict[str, Any]) -> list[dict[str, str]]:
             elif action:
                 events.append((ts, f"Advanced: {action}"))
 
+    reflections = state.get("reflection") or []
+    for record in reflections:
+        if not isinstance(record, dict):
+            continue
+        ts = parse_iso(record.get("timestamp"))
+        if ts:
+            events.append((ts, "Reflection recorded"))
+
     events.sort(key=lambda e: e[0] or datetime.min.replace(tzinfo=timezone.utc))
 
     timeline: list[dict[str, str]] = []
@@ -3039,7 +3212,7 @@ def show_task(
     payload = {
         "task_id": task_id,
         "status": state["status"],
-        "task": state["task"],
+        "task": state["task"]["original"] if isinstance(state.get("task"), dict) else state.get("task"),
         "recommendation": state.get("recommendation"),
         "confirmed_plan": state.get("confirmed_plan"),
         "continuation": state.get("continuation"),

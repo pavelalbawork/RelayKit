@@ -3182,10 +3182,13 @@ def _human_render_recommendation(payload: dict) -> str:
     setup = recommendation.get("setup", {})
     confidence = recommendation.get("confidence", {})
     delivery_mode = recommendation.get("delivery_mode", {})
+    verdict = delivery_mode.get("verdict")
     lines = [
         f"Task {payload.get('task_id')}",
-        f"Recommendation: {setup.get('coordination')} + {setup.get('continuity')}",
     ]
+    if verdict:
+        _append_line(lines, "Verdict", verdict)
+    _append_line(lines, "Recommendation", f"{setup.get('coordination')} + {setup.get('continuity')}")
     _append_line(lines, "Summary", recommendation.get("task_summary"))
     _append_line(lines, "Archetype", recommendation.get("archetype", {}).get("value"))
     _append_line(lines, "Confidence", confidence.get("level"))
@@ -3260,6 +3263,10 @@ def _human_render_confirm(payload: dict) -> str:
     plan = payload.get("confirmed_plan") or payload.get("phase") or {}
     setup = plan.get("setup") or {}
     if setup:
+        delivery_mode = plan.get("delivery_mode") or {}
+        verdict = delivery_mode.get("verdict")
+        if verdict:
+            _append_line(lines, "Verdict", verdict)
         _append_line(lines, "Setup", f"{setup.get('coordination')} + {setup.get('continuity')}")
     parts = plan.get("task_parts") or []
     if parts:
@@ -3363,6 +3370,141 @@ def render_taskflow_payload(payload: dict, *, command_name: str) -> str:
     if command_name == "reflect-task":
         return _human_render_reflection(payload)
     return json.dumps(payload, indent=2)
+
+
+def _run_input(prompt: str) -> str:
+    try:
+        return input(prompt)
+    except EOFError:
+        fail("interactive input ended before RelayKit could finish the run flow")
+
+
+def _run_print(payload: dict, *, command_name: str) -> None:
+    print(render_taskflow_payload(payload, command_name=command_name))
+    print("")
+
+
+def command_run(args: argparse.Namespace) -> int:
+    if not sys.stdin.isatty() and not args.task:
+        fail("relaykit run needs --task when stdin is not interactive")
+    registry = load_registry()
+    registry_issues = validate_registry(registry)
+    if registry_issues:
+        fail("registry validation failed", details=registry_issues)
+    workspace_root, workspace_profile, project_root, project_profile, storage_root = resolve_task_context(args, registry)
+    task_text = args.task or _run_input("Task: ").strip()
+    if not task_text:
+        fail("task text is required")
+    execution_context = load_task_execution_context(
+        registry,
+        workspace_root=workspace_root,
+        project_root=project_root,
+    )
+    try:
+        payload = taskflow.start_task(
+            registry,
+            workspace_root=workspace_root,
+            project_root=project_root,
+            workspace_profile=workspace_profile,
+            project_profile=project_profile,
+            task_text=task_text,
+            task_scope=args.task_scope,
+            allowed_hosts=args.allowed_host or None,
+            skip_clarification=bool(args.skip_clarification),
+            execution_context=execution_context,
+        )
+    except ValueError as error:
+        message, details = taskflow.parse_failure(error)
+        fail(message, details=details)
+    while True:
+        stage = payload.get("stage")
+        if stage == "clarification":
+            _run_print(payload, command_name="start-task")
+            question = payload.get("question") or {}
+            answer = _run_input("Answer (or /skip): ").strip()
+            try:
+                if answer == "/skip":
+                    if question.get("required"):
+                        print("This clarification is required before RelayKit can recommend a setup.\n")
+                        continue
+                    state = taskflow.load_task_state(payload["task_id"], storage_root, registry)
+                    state["clarification"]["skipped"] = True
+                    payload = taskflow.maybe_recommend(state, registry, workspace_profile, project_profile)
+                    state_file, summary_file = taskflow.save_task_state(state, registry)
+                    payload["state_path"] = str(state_file)
+                    payload["summary_path"] = str(summary_file)
+                else:
+                    if not answer:
+                        print("A required clarification needs an answer or /skip.\n")
+                        continue
+                    payload = taskflow.answer_task(
+                        registry,
+                        root=storage_root,
+                        task_id=payload["task_id"],
+                        answer=answer,
+                        question_id=question.get("id"),
+                        workspace_profile=workspace_profile,
+                        project_profile=project_profile,
+                    )
+            except ValueError as error:
+                message, details = taskflow.parse_failure(error)
+                fail(message, details=details)
+            continue
+        if stage == "recommendation":
+            _run_print(payload, command_name="start-task")
+            delivery_mode = (payload.get("recommendation") or {}).get("delivery_mode") or {}
+            if args.accept:
+                choice = "yes"
+            else:
+                choice = _run_input("Accept this setup? [Y/n/change/quit]: ").strip()
+            lowered = choice.lower()
+            if lowered in {"", "y", "yes"}:
+                force_protocol = bool(args.force_protocol)
+                if delivery_mode.get("recommended") == "manual" and not force_protocol:
+                    override = _run_input("RelayKit recommends manual here. Force protocol anyway? [y/N]: ").strip().lower()
+                    if override not in {"y", "yes"}:
+                        print("Run ended without entering RelayKit protocol.")
+                        return 0
+                    force_protocol = True
+                try:
+                    payload = taskflow.confirm_task(
+                        registry,
+                        root=storage_root,
+                        task_id=payload["task_id"],
+                        accept=True,
+                        change_text=None,
+                        workspace_profile=workspace_profile,
+                        project_profile=project_profile,
+                        force_protocol=force_protocol,
+                    )
+                except ValueError as error:
+                    message, details = taskflow.parse_failure(error)
+                    fail(message, details=details)
+                _run_print(payload, command_name="confirm-task")
+                return 0
+            if lowered in {"q", "quit", "no", "n"}:
+                print("Run ended without confirming the setup.")
+                return 0
+            try:
+                payload = taskflow.confirm_task(
+                    registry,
+                    root=storage_root,
+                    task_id=payload["task_id"],
+                    accept=False,
+                    change_text=choice,
+                    workspace_profile=workspace_profile,
+                    project_profile=project_profile,
+                    force_protocol=bool(args.force_protocol),
+                )
+            except ValueError as error:
+                message, details = taskflow.parse_failure(error)
+                fail(message, details=details)
+            continue
+        if stage == "confirmed":
+            _run_print(payload, command_name="confirm-task")
+            return 0
+        print(json.dumps(payload, indent=2))
+        return 0
 
 
 def print_taskflow_payload(payload: dict, *, format_name: str, command_name: str) -> None:
@@ -3746,6 +3888,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser_start_task.add_argument("--skip-clarification", action="store_true")
     parser_start_task.add_argument("--dry-run", action="store_true", help="Preview the recommendation without persisting any state.")
     parser_start_task.set_defaults(func=command_start_task)
+
+    parser_run = subparsers.add_parser(
+        "run",
+        help="Interactive RelayKit intake flow: clarify, recommend, and confirm in one guided shell session.",
+    )
+    add_task_context_arguments(parser_run)
+    parser_run.add_argument("--task")
+    parser_run.add_argument("--allowed-host", action="append")
+    parser_run.add_argument("--skip-clarification", action="store_true")
+    parser_run.add_argument("--accept", action="store_true", help="Auto-accept the first recommendation.")
+    parser_run.add_argument("--force-protocol", action="store_true", help="Allow RelayKit protocol even when the recommendation says manual is better.")
+    parser_run.set_defaults(func=command_run)
 
     parser_answer_task = subparsers.add_parser(
         "answer-task",
