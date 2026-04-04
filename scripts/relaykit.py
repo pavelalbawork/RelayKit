@@ -3266,6 +3266,7 @@ def command_confirm_task(args: argparse.Namespace) -> int:
             task_id=args.task_id,
             accept=bool(args.accept),
             change_text=args.change,
+            force_protocol=bool(args.force_protocol),
             workspace_profile=workspace_profile,
             project_profile=project_profile,
         )
@@ -3366,6 +3367,27 @@ def command_resume_task(args: argparse.Namespace) -> int:
             registry,
             root=storage_root,
             task_id=args.task_id,
+            verbosity=args.verbosity,
+        )
+    except ValueError as error:
+        message, details = taskflow.parse_failure(error)
+        fail(message, details=details)
+    print_taskflow_payload(payload)
+    return 0
+
+
+def command_resume_handoff(args: argparse.Namespace) -> int:
+    registry = load_registry()
+    registry_issues = validate_registry(registry)
+    if registry_issues:
+        fail("registry validation failed", details=registry_issues)
+    _workspace_root, _workspace_profile, _project_root, _project_profile, storage_root = resolve_task_context(args, registry)
+    try:
+        payload = taskflow.resume_handoff(
+            registry,
+            root=storage_root,
+            task_id=args.task_id,
+            part_id=args.part_id,
             verbosity=args.verbosity,
         )
     except ValueError as error:
@@ -3528,6 +3550,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser_confirm_task.add_argument("--task-id", required=True)
     parser_confirm_task.add_argument("--accept", action="store_true")
     parser_confirm_task.add_argument("--change")
+    parser_confirm_task.add_argument(
+        "--force-protocol",
+        action="store_true",
+        help="Override a manual-recommended gate and continue with RelayKit anyway.",
+    )
     parser_confirm_task.set_defaults(func=command_confirm_task)
 
     parser_checkpoint_task = subparsers.add_parser(
@@ -3589,6 +3616,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser_resume_task.add_argument("--task-id", required=True)
     parser_resume_task.add_argument("--verbosity", choices=sorted(taskflow.RESUME_VERBOSITIES), default="compact")
     parser_resume_task.set_defaults(func=command_resume_task)
+
+    parser_resume_handoff = subparsers.add_parser(
+        "resume-handoff",
+        help="Return a ready-to-run handoff bundle for the remaining or requested task parts.",
+    )
+    add_task_context_arguments(parser_resume_handoff)
+    parser_resume_handoff.add_argument("--task-id", required=True)
+    parser_resume_handoff.add_argument("--part-id")
+    parser_resume_handoff.add_argument("--verbosity", choices=sorted(taskflow.HANDOFF_VERBOSITIES), default="ultra-compact")
+    parser_resume_handoff.set_defaults(func=command_resume_handoff)
 
     parser_render_task_part = subparsers.add_parser(
         "render-task-part",

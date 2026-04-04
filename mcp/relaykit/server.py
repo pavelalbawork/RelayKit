@@ -571,6 +571,7 @@ def tool_confirm_task(arguments: dict[str, Any]) -> dict[str, Any]:
         task_id=task_id,
         accept=bool(arguments.get("accept", False)),
         change_text=arguments.get("change"),
+        force_protocol=bool(arguments.get("force_protocol", False)),
         workspace_profile=workspace_profile,
         project_profile=project_profile,
     )
@@ -681,6 +682,25 @@ def tool_resume_task(arguments: dict[str, Any]) -> dict[str, Any]:
         root=storage_root,
         task_id=task_id,
         verbosity=arguments.get("verbosity", "compact"),
+    )
+    return make_text_result(json_text(payload), structured=payload)
+
+
+def tool_resume_handoff(arguments: dict[str, Any]) -> dict[str, Any]:
+    registry = validate_registry_or_fail()
+    _workspace_root, _workspace_profile, _project_root, _project_profile, storage_root = resolve_task_context(
+        registry,
+        arguments,
+    )
+    task_id = arguments.get("task_id")
+    if not task_id:
+        raise ValueError("task_id is required")
+    payload = taskflow.resume_handoff(
+        registry,
+        root=storage_root,
+        task_id=task_id,
+        part_id=arguments.get("part_id"),
+        verbosity=arguments.get("verbosity", "ultra-compact"),
     )
     return make_text_result(json_text(payload), structured=payload)
 
@@ -1116,7 +1136,8 @@ TOOLS: dict[str, dict[str, Any]] = {
                 "task_scope": {"type": "string", "enum": ["workspace", "project"]},
                 "task_id": {"type": "string"},
                 "accept": {"type": "boolean"},
-                "change": {"type": "string"}
+                "change": {"type": "string"},
+                "force_protocol": {"type": "boolean"}
             },
             "required": ["task_id"],
             "additionalProperties": False
@@ -1248,7 +1269,7 @@ TOOLS: dict[str, dict[str, Any]] = {
         "handler": tool_advance_task,
     },
     "relaykit_resume_task": {
-        "description": "Resume a RelayKit task and get summary plus targeted resume questions when needed.",
+        "description": "Resume a RelayKit task and get operator-facing summary plus targeted resume questions when needed.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -1264,6 +1285,25 @@ TOOLS: dict[str, dict[str, Any]] = {
             "additionalProperties": False
         },
         "handler": tool_resume_task,
+    },
+    "relaykit_resume_handoff": {
+        "description": "Return a ready-to-run handoff bundle for the remaining or requested task parts after an interruption.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "workspace_root": {"type": "string"},
+                "project_root": {"type": "string"},
+                "workspace_profile": {"type": "string"},
+                "project_profile": {"type": "string"},
+                "task_scope": {"type": "string", "enum": ["workspace", "project"]},
+                "task_id": {"type": "string"},
+                "part_id": {"type": "string"},
+                "verbosity": {"type": "string", "enum": sorted(taskflow.HANDOFF_VERBOSITIES)}
+            },
+            "required": ["task_id"],
+            "additionalProperties": False
+        },
+        "handler": tool_resume_handoff,
     },
     "relaykit_render_task_part": {
         "description": "Render the current launch bundle for one task part, including its prompt stack and execution brief.",

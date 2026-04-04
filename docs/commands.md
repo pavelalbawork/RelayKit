@@ -13,8 +13,9 @@
 | `checkpoint-phase` | Record a batch checkpoint for multiple task parts in the current phase |
 | `prepare-git` | Explicitly create per-task-part git branches after confirmation |
 | `advance-task` | Apply a setup or phase change after checkpoint |
-| `resume-task` | Resume a paused task with context for the active lanes |
-| `render-task-part` | Render one task part as a compact or verbose launch bundle |
+| `resume-task` | Resume a paused task with operator-facing context for the active lanes |
+| `resume-handoff` | Generate ready-to-send handoff packets for the remaining active task parts |
+| `render-task-part` | Render one task part as an ultra-compact, compact, or verbose launch bundle |
 | `render-consolidation-packet` | Generate a consolidation handoff from the latest phase checkpoints |
 | `reflect-task` | Post-task learning: was the multi-harness setup worth it? |
 
@@ -71,7 +72,13 @@ relaykit render-consolidation-packet --workspace-root . --task-id <id>
 relaykit reflect-task --workspace-root . --task-id <id> --split-worth-it yes --tool-fit good
 ```
 
-`confirm-task` returns a `launch_bundle` automatically on lean coordinated runs, so you usually do not need separate `render-task-part` calls unless you want a verbose packet or need to re-render later. Compact launch markdown omits empty task-context fields and keeps the machine-readable handoff card in the structured payload instead of repeating it inline.
+`confirm-task` returns a `launch_bundle` automatically on lean coordinated runs, so you usually do not need separate `render-task-part` calls unless you want a verbose packet or need to re-render later. Compact launch markdown omits empty task-context fields and keeps the machine-readable handoff card in the structured payload instead of repeating it inline. The default lean launch bundle now uses `ultra-compact` handoffs to minimize packet size.
+
+If `confirm-task` says the task should stay manual, RelayKit is telling you the protocol overhead is not worth it. Force the protocol only when you explicitly need handoffs or persistent state:
+
+```bash
+relaykit confirm-task --workspace-root . --task-id <id> --accept --force-protocol
+```
 
 **Full coordinated task with explicit per-part rendering and checkpoints:**
 ```bash
@@ -85,8 +92,16 @@ relaykit resume-task --workspace-root . --task-id <id>
 relaykit reflect-task --workspace-root . --task-id <id> --split-worth-it yes --tool-fit good
 ```
 
+**Interrupted lean task:**
+```bash
+relaykit resume-task --workspace-root . --task-id <id>
+relaykit resume-handoff --workspace-root . --task-id <id>
+```
+
+Use `resume-task` for the operator summary and `resume-handoff` when you need the remaining-part launch packets directly.
+
 ## MCP Tools
 
 The MCP server exposes the operational RelayKit commands as tools prefixed with `relaykit_`:
 
-`relaykit_start_task`, `relaykit_answer_task`, `relaykit_confirm_task`, `relaykit_show_task`, `relaykit_list_tasks`, `relaykit_checkpoint_task`, `relaykit_checkpoint_phase`, `relaykit_prepare_git`, `relaykit_advance_task`, `relaykit_resume_task`, `relaykit_render_task_part`, `relaykit_render_consolidation_packet`, `relaykit_reflect_task`, `relaykit_host_status`, `relaykit_guided_setup`, `relaykit_setup`, `relaykit_bootstrap_host`, `relaykit_uninstall_host`, `relaykit_acknowledge_host`, `relaykit_install_self`, `relaykit_smoke`, `relaykit_doctor`, `relaykit_list`, `relaykit_preset`, `relaykit_stack`, `relaykit_render_prompt_stack`, `relaykit_init_workspace`, `relaykit_init_project`, `relaykit_init_persona`.
+`relaykit_start_task`, `relaykit_answer_task`, `relaykit_confirm_task`, `relaykit_show_task`, `relaykit_list_tasks`, `relaykit_checkpoint_task`, `relaykit_checkpoint_phase`, `relaykit_prepare_git`, `relaykit_advance_task`, `relaykit_resume_task`, `relaykit_resume_handoff`, `relaykit_render_task_part`, `relaykit_render_consolidation_packet`, `relaykit_reflect_task`, `relaykit_host_status`, `relaykit_guided_setup`, `relaykit_setup`, `relaykit_bootstrap_host`, `relaykit_uninstall_host`, `relaykit_acknowledge_host`, `relaykit_install_self`, `relaykit_smoke`, `relaykit_doctor`, `relaykit_list`, `relaykit_preset`, `relaykit_stack`, `relaykit_render_prompt_stack`, `relaykit_init_workspace`, `relaykit_init_project`, `relaykit_init_persona`.

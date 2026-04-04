@@ -31,7 +31,7 @@ CHECKPOINT_ACTIONS = {
 CHANGE_REASONS = {"stage_change", "setup_underperformed", "new_information", "scope_change", "none"}
 REFLECTION_VALUES = {"yes", "no", "mixed", "unknown"}
 TOOL_FIT_VALUES = {"good", "bad", "mixed", "unknown"}
-HANDOFF_VERBOSITIES = {"compact", "verbose"}
+HANDOFF_VERBOSITIES = {"ultra-compact", "compact", "verbose"}
 RESUME_VERBOSITIES = {"compact", "verbose"}
 RESULT_VERBOSITIES = {"compact", "verbose"}
 TOOL_COST = {
@@ -526,6 +526,20 @@ def _compact_execution_context(execution_context: dict[str, Any] | None) -> dict
     if note:
         payload["note"] = note
     return payload
+
+
+def _ultra_compact_execution_context(execution_context: dict[str, Any] | None) -> dict[str, Any] | None:
+    compact = _compact_execution_context(execution_context)
+    if not compact:
+        return None
+    payload: dict[str, Any] = {}
+    commands = compact.get("validated_commands") or []
+    if commands:
+        payload["command"] = commands[0]["command"]
+    note = compact.get("note")
+    if note:
+        payload["note"] = note
+    return payload or None
 
 
 def classify_task(state: dict[str, Any], registry: dict[str, Any]) -> dict[str, Any]:
@@ -1063,6 +1077,13 @@ def build_research_recommendation(
             "mode": "pre-planning",
             "summary": "Pause execution and gather the missing evidence before the next phase starts.",
         },
+        "delivery_mode": {
+            "recommended": "relaykit",
+            "protocol_setup": "solo+full",
+            "gate_required": False,
+            "reason": "RelayKit full continuity is recommended because execution is explicitly paused on a dedicated research lane.",
+            "override_hint": "",
+        },
         "notable_exclusions": [],
         "next_step": "Run the research part, then checkpoint again before returning to execution.",
         "confirm_prompt": "Accept this setup, or tell me what to change.",
@@ -1131,6 +1152,66 @@ def _change_requests_research(change_text: str) -> bool:
         r"\bvalidate assumptions\b",
     )
     return any(re.search(pattern, lowered) for pattern in targeted_patterns)
+
+
+def _manual_mode_candidate(
+    classification: dict[str, Any],
+    *,
+    coordination: str,
+    continuity: str,
+    parts: list[dict[str, Any]],
+    complexity: int,
+) -> bool:
+    flags = classification["flags"]
+    if classification["task_type"] != "execution-ready":
+        return False
+    if coordination != "coordinated" or continuity != "lean":
+        return False
+    if len(parts) != 2:
+        return False
+    if flags["frontend"] or flags["research"] or flags["cross_project"] or flags["pause_sensitive"]:
+        return False
+    if complexity > 4:
+        return False
+    return True
+
+
+def _delivery_mode_recommendation(
+    classification: dict[str, Any],
+    *,
+    coordination: str,
+    continuity: str,
+    parts: list[dict[str, Any]],
+    complexity: int,
+) -> dict[str, Any]:
+    setup_name = f"{coordination}+{continuity}"
+    if _manual_mode_candidate(
+        classification,
+        coordination=coordination,
+        continuity=continuity,
+        parts=parts,
+        complexity=complexity,
+    ):
+        return {
+            "recommended": "manual",
+            "protocol_setup": setup_name,
+            "gate_required": True,
+            "reason": "This is a small bounded two-lane task. RelayKit can still coordinate it, but the protocol is usually heavier than a direct manual handoff here.",
+            "override_hint": "If you still want RelayKit state, confirm with force_protocol.",
+        }
+    if continuity == "full":
+        reason = "RelayKit full continuity is recommended because the task shape benefits from durable checkpoints, reroute handling, or a dedicated research lane."
+    elif coordination == "coordinated":
+        reason = "RelayKit lean coordination is recommended because the task benefits from a second lane without paying for full continuity."
+    else:
+        reason = "RelayKit is light enough here and keeps the task durable without extra coordination overhead."
+    return {
+        "recommended": "relaykit",
+        "protocol_setup": setup_name,
+        "gate_required": False,
+        "reason": reason,
+        "override_hint": "",
+    }
 
 
 def setup_recommendation(
@@ -1336,8 +1417,18 @@ def setup_recommendation(
         why_not_simpler = (
             "the task has enough complexity, uncertainty, or verification pressure that a simpler setup would likely hide risk or overload one lane."
         )
-
+    delivery_mode = _delivery_mode_recommendation(
+        classification,
+        coordination=coordination,
+        continuity=continuity,
+        parts=assigned_parts,
+        complexity=complexity,
+    )
     next_step = "Accept this setup to create the task phase." if continuity == "full" else "Accept this setup to launch the task."
+    confirm_prompt = "Accept this setup, or tell me what to change."
+    if delivery_mode["recommended"] == "manual":
+        next_step = "Manual coordination is recommended. If you still want RelayKit state, confirm with force_protocol."
+        confirm_prompt = "Manual coordination is recommended for this task. Confirm with force_protocol to continue in RelayKit anyway, or tell me what to change."
 
     recommendation = {
         "task_summary": task_summary_text(state),
@@ -1365,9 +1456,10 @@ def setup_recommendation(
             "mode": research_mode,
             "summary": research_summary,
         },
+        "delivery_mode": delivery_mode,
         "notable_exclusions": notable_exclusions,
         "next_step": next_step,
-        "confirm_prompt": "Accept this setup, or tell me what to change.",
+        "confirm_prompt": confirm_prompt,
         "internal_preset": preset_name,
         "learned_influence": _build_learned_influence(
             state, classification["archetype"],
@@ -1977,6 +2069,7 @@ def confirm_task(
     change_text: str | None,
     workspace_profile: dict[str, Any] | None,
     project_profile: dict[str, Any] | None,
+    force_protocol: bool = False,
 ) -> dict[str, Any]:
     state = load_task_state(task_id, root, registry)
     if change_text:
@@ -1996,6 +2089,13 @@ def confirm_task(
     recommendation = state.get("recommendation")
     if not recommendation:
         fail("task has no recommendation to confirm yet")
+    delivery_mode = recommendation.get("delivery_mode") or {}
+    if delivery_mode.get("recommended") == "manual" and not force_protocol:
+        details = [str(delivery_mode.get("reason") or "Manual coordination is recommended for this task.")]
+        override_hint = str(delivery_mode.get("override_hint") or "").strip()
+        if override_hint:
+            details.append(override_hint)
+        fail("manual execution is recommended before entering RelayKit protocol", details=details)
     phase_id = f"phase-{len(state['phases']) + 1:02d}"
     phase = {
         "phase_id": phase_id,
@@ -2014,7 +2114,7 @@ def confirm_task(
     state["status"] = "active" if recommendation["setup"]["continuity"] == "full" else "launched"
     launch_bundle = None
     if recommendation["setup"]["continuity"] == "lean":
-        launch_bundle = build_launch_bundle(state, recommendation["task_parts"], registry, verbosity="compact")
+        launch_bundle = build_launch_bundle(state, recommendation["task_parts"], registry, verbosity="ultra-compact")
     state["continuation"] = {
         "current_state": "The task is confirmed and ready to run.",
         "next_best_action": "Launch the bundled task parts." if launch_bundle else "Start the first task part with the assigned tool and model.",
@@ -2031,6 +2131,12 @@ def confirm_task(
     }
     if launch_bundle:
         payload["launch_bundle"] = launch_bundle
+    if force_protocol and delivery_mode.get("recommended") == "manual":
+        payload["protocol_override"] = {
+            "forced": True,
+            "recommended": "manual",
+            "reason": delivery_mode.get("reason"),
+        }
     git_enabled = git_module.resolve_git_config(workspace_profile, project_profile)
     repo_root = Path(state.get("project_root") or state.get("workspace_root") or ".")
     if git_enabled and git_module.is_git_repo(repo_root):
@@ -2467,6 +2573,31 @@ def _compact_continuation_summary(
     return payload
 
 
+def _active_handoff_parts(
+    state: dict[str, Any],
+    plan: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str], str]:
+    current_parts = list(plan.get("task_parts", []))
+    if plan.get("setup", {}).get("continuity") != "lean":
+        return current_parts, current_parts, [], "all_current_parts"
+    phase = current_phase(state)
+    checkpointed_parts = set(_phase_checkpointed_parts(phase)) if phase else set()
+    completed_part_ids = [
+        part.get("part_id")
+        for part in current_parts
+        if part.get("part_id") in checkpointed_parts
+    ]
+    remaining_parts = [
+        part for part in current_parts
+        if part.get("part_id") not in checkpointed_parts
+    ]
+    scope = "remaining_parts" if checkpointed_parts else "all_current_parts"
+    if not remaining_parts:
+        remaining_parts = current_parts
+        scope = "all_current_parts"
+    return current_parts, remaining_parts, completed_part_ids, scope
+
+
 def is_stale(state: dict[str, Any]) -> bool:
     if state.get("status") in TERMINAL_STATUSES:
         return False
@@ -2492,10 +2623,6 @@ def resume_task(
     if verbosity not in RESUME_VERBOSITIES:
         fail(f"invalid resume verbosity `{verbosity}`")
     state = load_task_state(task_id, root, registry)
-    launch_bundle: list[dict[str, Any]] | None = None
-    launch_bundle_scope: str | None = None
-    remaining_part_ids: list[str] = []
-    completed_part_ids: list[str] = []
     payload: dict[str, Any] = {
         "task_id": task_id,
         "stage": "resume",
@@ -2538,50 +2665,42 @@ def resume_task(
             payload["task_parts"] = parts_with_stacks
         else:
             payload["setup"] = _compact_setup_summary(plan.get("setup", {}))
-        if plan.get("setup", {}).get("continuity") == "lean":
-            phase = current_phase(state)
-            checkpointed_parts = set(_phase_checkpointed_parts(phase)) if phase else set()
-            completed_part_ids = [
-                part.get("part_id")
-                for part in plan.get("task_parts", [])
-                if part.get("part_id") in checkpointed_parts
-            ]
-            remaining_parts = [
-                part for part in plan.get("task_parts", [])
-                if part.get("part_id") not in checkpointed_parts
-            ]
-            if not remaining_parts:
-                remaining_parts = plan.get("task_parts", [])
-            launch_bundle = build_launch_bundle(
-                state,
-                remaining_parts,
-                registry,
-                verbosity="compact",
-            )
-            launch_bundle_scope = "remaining_parts" if checkpointed_parts else "all_current_parts"
-            remaining_part_ids = [part.get("part_id") for part in remaining_parts if part.get("part_id")]
-            if verbosity == "compact":
-                payload["task_parts"] = [_resume_part_summary(part) for part in remaining_parts]
-                if completed_part_ids:
-                    payload["completed_part_ids"] = completed_part_ids
-            else:
-                payload["launch_bundle"] = launch_bundle
-                payload["launch_bundle_scope"] = launch_bundle_scope
-                payload["remaining_part_ids"] = remaining_part_ids
-        elif verbosity == "compact":
+        current_parts, handoff_parts, completed_part_ids, handoff_scope = _active_handoff_parts(state, plan)
+        handoff_part_ids = [part.get("part_id") for part in handoff_parts if part.get("part_id")]
+        if verbosity == "compact":
             payload["task_parts"] = [
                 _resume_part_summary(part)
-                for part in plan.get("task_parts", [])
+                for part in (handoff_parts if plan.get("setup", {}).get("continuity") == "lean" else current_parts)
             ]
+            handoff_available: dict[str, Any] = {
+                "available": True,
+                "suggested_command": f"relaykit.py resume-handoff --task-id {task_id}",
+                "launch_bundle_scope": handoff_scope,
+                "part_ids": handoff_part_ids,
+            }
+            if completed_part_ids:
+                payload["completed_part_ids"] = completed_part_ids
+                handoff_available["completed_part_ids"] = completed_part_ids
+            payload["handoff_available"] = handoff_available
+        else:
+            if not payload.get("task_parts"):
+                payload["task_parts"] = [
+                    _resume_part_summary(part)
+                    for part in current_parts
+                ]
+            payload["handoff_available"] = {
+                "available": True,
+                "suggested_command": f"relaykit.py resume-handoff --task-id {task_id}",
+                "launch_bundle_scope": handoff_scope,
+                "part_ids": handoff_part_ids,
+            }
+            if completed_part_ids:
+                payload["completed_part_ids"] = completed_part_ids
         if verbosity == "compact":
             payload["summary"] = _compact_continuation_summary(
                 state.get("continuation", {}),
-                has_launch_bundle=bool(launch_bundle),
+                has_launch_bundle=False,
             )
-            if launch_bundle:
-                payload["launch_bundle"] = launch_bundle
-                payload["launch_bundle_scope"] = launch_bundle_scope
-                payload["remaining_part_ids"] = remaining_part_ids
         profile_dirname = registry["defaults"]["profile_dirname"]
         sp = scratchpad_path(root, profile_dirname, task_id)
         if sp.exists():
@@ -2595,6 +2714,57 @@ def resume_task(
             state.get("continuation", {}),
             has_launch_bundle=False,
         )
+    return payload
+
+
+def resume_handoff(
+    registry: dict[str, Any],
+    *,
+    root: Path,
+    task_id: str,
+    part_id: str | None = None,
+    verbosity: str = "ultra-compact",
+) -> dict[str, Any]:
+    if verbosity not in HANDOFF_VERBOSITIES:
+        fail(f"invalid handoff verbosity `{verbosity}`")
+    state = load_task_state(task_id, root, registry)
+    if state.get("status") in TERMINAL_STATUSES:
+        fail("task is terminal; there is no active handoff to resume")
+    plan = active_plan(state)
+    if plan is None:
+        fail("task has no active plan to resume")
+    _current_parts, handoff_parts, completed_part_ids, handoff_scope = _active_handoff_parts(state, plan)
+    if part_id:
+        handoff_parts = [part for part in handoff_parts if part.get("part_id") == part_id]
+        if not handoff_parts:
+            fail(f"task part `{part_id}` is not active in the current handoff scope")
+        handoff_scope = "requested_part"
+    part_ids = [part.get("part_id") for part in handoff_parts if part.get("part_id")]
+    payload: dict[str, Any] = {
+        "task_id": task_id,
+        "stage": "resume_handoff",
+        "status": state.get("status"),
+        "phase_id": state.get("current_phase_id"),
+        "verbosity": verbosity,
+        "launch_bundle_scope": handoff_scope,
+        "part_ids": part_ids,
+        "launch_bundle": build_launch_bundle(state, handoff_parts, registry, verbosity=verbosity),
+    }
+    if completed_part_ids:
+        payload["completed_part_ids"] = completed_part_ids
+    continuation = state.get("continuation", {})
+    if continuation.get("current_state"):
+        payload["current_state"] = continuation["current_state"]
+    if continuation.get("safe_stop_point"):
+        payload["safe_stop_point"] = continuation["safe_stop_point"]
+    if state.get("storage_root"):
+        sp = scratchpad_path(
+            Path(state["storage_root"]),
+            state.get("profile_dirname") or ".relaykit",
+            task_id,
+        )
+        if sp.exists():
+            payload["scratchpad_path"] = _compact_display_path(str(sp), state) if verbosity != "verbose" else str(sp)
     return payload
 
 
@@ -2911,6 +3081,33 @@ def build_handoff_card(
             )
         )
     execution_context = state.get("execution_context")
+    if verbosity == "ultra-compact":
+        payload = {
+            "task_id": state["task_id"],
+            "phase_id": state.get("current_phase_id"),
+            "part_id": part["part_id"],
+            "role": assignment["role"],
+            "host": assignment["host"],
+            "model": assignment["model"],
+            "goal": part["objective"],
+            "stop_condition": stop_condition,
+            "stack_ids": [
+                {"kind": item["kind"], "id": item["id"]}
+                for item in part.get("stack_components", [])
+            ],
+        }
+        if state.get("project_root"):
+            payload["project_root"] = state["project_root"]
+        if state.get("workspace_root"):
+            payload["workspace_root"] = state["workspace_root"]
+        if state["task"].get("verification"):
+            payload["verification_target"] = state["task"]["verification"]
+        if scratchpad:
+            payload["scratchpad_path"] = _compact_display_path(scratchpad, state)
+        ultra_execution_context = _ultra_compact_execution_context(execution_context)
+        if ultra_execution_context:
+            payload["execution_context"] = ultra_execution_context
+        return payload
     if verbosity == "verbose":
         payload = {
             "task_id": state["task_id"],
@@ -3151,7 +3348,21 @@ def render_task_part_markdown(
         "notify": "notify (record and notify, does not block)",
         "gate": "gate (requires human approval)",
     }
-    if verbosity == "verbose":
+    if verbosity == "ultra-compact":
+        lines = [
+            f"# RelayKit Task Part: {part['name']}",
+            "",
+            f"- `{assignment['host']}` / `{assignment['model']}` / `{policy}` checkpoint",
+            f"- Task: `{state['task_id']}` · Phase: `{state.get('current_phase_id') or 'unconfirmed'}`",
+            "",
+            "## Goal",
+            "",
+            part["objective"],
+            "",
+        ]
+        if state["task"].get("verification"):
+            lines.extend(["## Verify", "", state["task"]["verification"], ""])
+    elif verbosity == "verbose":
         lines = [
             f"# RelayKit Task Part: {part['name']}",
             "",
@@ -3198,11 +3409,25 @@ def render_task_part_markdown(
         ]
         lines.extend(_compact_task_context_lines(state))
         lines.append("")
-    prior_lines = render_prior_context(state, part["part_id"], verbosity=verbosity)
-    if prior_lines:
-        lines.extend(prior_lines)
+    if verbosity != "ultra-compact":
+        prior_lines = render_prior_context(state, part["part_id"], verbosity=verbosity)
+        if prior_lines:
+            lines.extend(prior_lines)
     compact_execution_context = _compact_execution_context(execution_context)
-    if verbosity == "compact" and compact_execution_context:
+    ultra_execution_context = _ultra_compact_execution_context(execution_context)
+    if verbosity == "ultra-compact" and ultra_execution_context:
+        lines.extend(["## Runtime", ""])
+        command = ultra_execution_context.get("command")
+        if command:
+            lines.append(f"- Run: `{command}`")
+        note = ultra_execution_context.get("note")
+        if note:
+            lines.append(f"- Note: {note}")
+        scratchpad_path = handoff_card.get("scratchpad_path")
+        if scratchpad_path:
+            lines.append(f"- Scratchpad: `{scratchpad_path}`")
+        lines.append("")
+    elif verbosity == "compact" and compact_execution_context:
         lines.extend(["## Runtime", ""])
         for item in compact_execution_context.get("validated_commands", []):
             label = "Validated command"
@@ -3226,12 +3451,7 @@ def render_task_part_markdown(
                 lines.append("Validated notes:")
             lines.extend([f"- {note}" for note in notes])
         lines.append("")
-    lines.extend(
-        [
-            "## Prompt Stack",
-            "",
-        ]
-    )
+    lines.extend(["## Prompt Stack", ""])
     for component in part.get("stack_components", []):
         if verbosity == "verbose":
             lines.append(f"- `{component['kind']}` `{component['id']}` -> `{component['path']}`")
@@ -3277,6 +3497,7 @@ def render_task_part_markdown(
             "## Start Here",
             "",
             "Load the prompt stack, execute only this part, then checkpoint with `relaykit_checkpoint_task`.",
+            "If the session is interrupted, use `relaykit_resume_handoff` to recover the next ready packet.",
             "",
         ]
     )
@@ -3300,7 +3521,7 @@ def _build_task_part_payload(
         )
         if candidate.exists():
             sp = str(candidate)
-    return {
+    payload = {
         "task_id": state["task_id"],
         "phase_id": state.get("current_phase_id"),
         "part_id": part["part_id"],
@@ -3318,6 +3539,18 @@ def _build_task_part_payload(
         "prior_artifacts": collect_prior_artifacts(state, part["part_id"]),
         "handoff_card": handoff_card,
     }
+    if verbosity == "ultra-compact":
+        payload["task_context"] = {
+            key: value
+            for key, value in {
+                "verification": state["task"].get("verification"),
+                "scope_boundaries": state["task"].get("scope_boundaries"),
+            }.items()
+            if value
+        }
+        payload["scratchpad_path"] = _compact_display_path(sp, state) if sp else None
+        payload["prior_artifacts"] = []
+    return payload
 
 
 def build_launch_bundle(
@@ -3325,7 +3558,7 @@ def build_launch_bundle(
     task_parts: list[dict[str, Any]],
     registry: dict[str, Any],
     *,
-    verbosity: str = "compact",
+    verbosity: str = "ultra-compact",
 ) -> list[dict[str, Any]]:
     bundle: list[dict[str, Any]] = []
     for part in task_parts:
@@ -3414,7 +3647,7 @@ def render_consolidation_packet(
     sp = scratchpad_path(root, profile_dirname, task_id)
     if sp.exists():
         scratchpad_text = sp.read_text(encoding="utf-8")
-    scratchpad_limit = 4000 if verbosity == "verbose" else 1200
+    scratchpad_limit = 4000 if verbosity == "verbose" else (700 if verbosity == "ultra-compact" else 1200)
     scratchpad_excerpt = _tail_text_excerpt(scratchpad_text, limit=scratchpad_limit)
 
     lines = [
@@ -3450,7 +3683,10 @@ def render_consolidation_packet(
                     [
                         "#### Report Summary",
                         "",
-                        _report_markdown_excerpt(report["report_markdown"]),
+                        _report_markdown_excerpt(
+                            report["report_markdown"],
+                            limit=450 if verbosity == "ultra-compact" else 900,
+                        ),
                         "",
                     ]
                 )
@@ -3476,7 +3712,11 @@ def render_consolidation_packet(
             "task_summary": task_summary_text(state),
         },
         "reports": reports,
-        "scratchpad_path": str(sp) if sp.exists() else None,
+        "scratchpad_path": (
+            _compact_display_path(str(sp), state)
+            if sp.exists() and verbosity != "verbose"
+            else (str(sp) if sp.exists() else None)
+        ),
         "scratchpad_excerpt": scratchpad_excerpt or None,
         "markdown": markdown,
     }

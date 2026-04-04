@@ -143,7 +143,9 @@ Confirm and execute:
 relaykit confirm-task --workspace-root . --task-id <id> --accept
 ```
 
-For small bounded coordinated tasks, RelayKit now defaults to `coordinated+lean`. In that path, `confirm-task` returns a `launch_bundle` immediately with compact handoff cards and compact launch markdown, so you usually do not need separate `render-task-part` calls unless you want a verbose packet or need to re-render later.
+If RelayKit decides a task is so small and bounded that the protocol is not worth it, `confirm-task` will stop and recommend manual coordination instead. Use `--force-protocol` only when you explicitly want RelayKit state and handoffs anyway.
+
+For small bounded coordinated tasks that still benefit from the protocol, RelayKit now defaults to `coordinated+lean`. In that path, `confirm-task` returns a `launch_bundle` immediately with ultra-compact handoff cards and compact launch markdown, so you usually do not need separate `render-task-part` calls unless you want a verbose packet or need to re-render later.
 
 Checkpoint, resume, and reflect when done:
 
@@ -153,6 +155,12 @@ relaykit resume-task --workspace-root . --task-id <id>
 relaykit reflect-task --workspace-root . --task-id <id> --split-worth-it yes --tool-fit good
 ```
 
+Use `resume-task` for the operator view. If you need ready-to-send packets for the remaining active parts after an interruption, use:
+
+```bash
+relaykit resume-handoff --workspace-root . --task-id <id>
+```
+
 For lean coordinated phases, prefer the batched path:
 
 ```bash
@@ -160,7 +168,7 @@ relaykit checkpoint-phase --workspace-root . --task-id <id> --reports '[{"part_i
 relaykit render-consolidation-packet --workspace-root . --task-id <id>
 ```
 
-The compact consolidation packet keeps the full per-part reports in the structured payload while summarizing them in the markdown handoff by default. Use `--verbosity verbose` when you want the full inline report text.
+The compact consolidation packet keeps the full per-part reports in the structured payload while summarizing them in the markdown handoff by default. Use `--verbosity verbose` when you want the full inline report text. The lean path is optimized for low-overhead handoffs; use `render-task-part --verbosity verbose` when a receiving host needs the full prompt stack and richer context.
 
 ## Workspace Setup
 
