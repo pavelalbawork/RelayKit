@@ -2,6 +2,8 @@
 
 ## Task Lifecycle
 
+Task lifecycle commands default to `--format auto`, which means a concise human-readable view in an interactive terminal and JSON when stdout is redirected. Use `--format json` to force the machine payload, or `--format human` to force the operator view.
+
 | Command | Purpose |
 |---|---|
 | `start-task` | Begin a new multi-harness task from free text |

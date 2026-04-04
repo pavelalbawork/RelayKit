@@ -131,6 +131,8 @@ Start a task:
 relaykit start-task --workspace-root . --task "Build the login page"
 ```
 
+Lifecycle commands now default to a concise human-readable view in an interactive terminal. Use `--format json` when you want the raw machine payload for scripting or debugging.
+
 Answer clarification questions until you get a recommendation:
 
 ```bash

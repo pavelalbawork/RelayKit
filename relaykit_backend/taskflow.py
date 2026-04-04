@@ -1383,8 +1383,12 @@ def setup_recommendation(
         research_mode = "parallel"
         research_summary = "A bounded execution slice can start while research resolves the remaining ambiguity."
     elif classification["confidence"] == "low":
-        research_mode = "note"
-        research_summary = "Research is still recommended before the task closes because uncertainty remains high."
+        if coordination == "solo" and continuity == "lean":
+            research_mode = "none"
+            research_summary = "No separate research lane is needed right now."
+        else:
+            research_mode = "note"
+            research_summary = "No separate research lane is planned yet, but uncertainty is still high enough to watch during execution."
 
     coordination_overhead = "low" if len(assigned_parts) == 1 else "medium"
     if len(set(selected_hosts)) > 1 or len(assigned_parts) > 2:
@@ -1713,7 +1717,7 @@ def next_question(state: dict[str, Any], registry: dict[str, Any]) -> dict[str, 
         return {
             "id": "inventory_hosts",
             "field": "allowed_hosts",
-            "prompt": "Which tools should RelayKit consider for this task?",
+            "prompt": "Should I stick to your default tools for this task, or should RelayKit consider other hosts too?",
             "required": True,
         }
     if not state["task"].get("scope_boundaries") and "scope_boundaries" not in asked_ids:

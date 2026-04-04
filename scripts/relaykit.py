@@ -3148,7 +3148,228 @@ def resolve_task_context(
     return workspace_root, workspace_profile, project_root, project_profile, storage_root
 
 
-def print_taskflow_payload(payload: dict) -> None:
+def _resolve_output_format(format_name: str) -> str:
+    if format_name == "auto":
+        return "human" if sys.stdout.isatty() else "json"
+    return format_name
+
+
+def _append_line(lines: list[str], label: str, value: object) -> None:
+    if value is None:
+        return
+    if isinstance(value, str) and not value.strip():
+        return
+    lines.append(f"{label}: {value}")
+
+
+def _human_task_part_lines(parts: list[dict]) -> list[str]:
+    lines: list[str] = []
+    for part in parts:
+        assignment = part.get("assignment", {})
+        header = f"- {part.get('name', part.get('part_id', 'part'))}: {assignment.get('host', '?')} / {assignment.get('model', '?')}"
+        role = assignment.get("role")
+        if role:
+            header += f" / {role}"
+        lines.append(header)
+        objective = part.get("objective")
+        if objective:
+            lines.append(f"  objective: {objective}")
+    return lines
+
+
+def _human_render_recommendation(payload: dict) -> str:
+    recommendation = payload["recommendation"]
+    setup = recommendation.get("setup", {})
+    confidence = recommendation.get("confidence", {})
+    delivery_mode = recommendation.get("delivery_mode", {})
+    lines = [
+        f"Task {payload.get('task_id')}",
+        f"Recommendation: {setup.get('coordination')} + {setup.get('continuity')}",
+    ]
+    _append_line(lines, "Summary", recommendation.get("task_summary"))
+    _append_line(lines, "Archetype", recommendation.get("archetype", {}).get("value"))
+    _append_line(lines, "Confidence", confidence.get("level"))
+    _append_line(lines, "Main uncertainty", confidence.get("main_uncertainty"))
+    why_enough = setup.get("why_this_is_enough")
+    why_not_simpler = setup.get("why_not_simpler")
+    if why_enough:
+        _append_line(lines, "Why this is enough", why_enough)
+    if why_not_simpler:
+        _append_line(lines, "Why not simpler", why_not_simpler)
+    if delivery_mode.get("recommended") == "manual":
+        _append_line(lines, "Delivery", "manual recommended")
+        _append_line(lines, "Reason", delivery_mode.get("reason"))
+    research = recommendation.get("research", {})
+    if research.get("summary") and research.get("mode") != "none":
+        _append_line(lines, "Research note", research.get("summary"))
+    parts = recommendation.get("task_parts", [])
+    if parts:
+        lines.append("Task parts:")
+        lines.extend(_human_task_part_lines(parts))
+    _append_line(lines, "Next step", recommendation.get("next_step"))
+    _append_line(lines, "Confirm prompt", recommendation.get("confirm_prompt"))
+    _append_line(lines, "State", payload.get("state_path"))
+    return "\n".join(lines)
+
+
+def _human_render_clarification(payload: dict) -> str:
+    question = payload.get("question", {})
+    lines = [f"Task {payload.get('task_id')}", "Clarification needed:"]
+    _append_line(lines, "Question", question.get("prompt"))
+    _append_line(lines, "Question id", question.get("id"))
+    _append_line(lines, "Required", "yes" if question.get("required") else "no")
+    _append_line(lines, "Asked", f"{payload.get('asked_count')}/{payload.get('question_cap')}")
+    _append_line(lines, "State", payload.get("state_path"))
+    return "\n".join(lines)
+
+
+def _human_render_show_task(payload: dict) -> str:
+    lines = [f"Task {payload.get('task_id')}"]
+    _append_line(lines, "Status", payload.get("status"))
+    _append_line(lines, "Scope", payload.get("scope"))
+    _append_line(lines, "Task", payload.get("task"))
+    recommendation = payload.get("recommendation") or {}
+    setup = recommendation.get("setup") or {}
+    if setup:
+        _append_line(lines, "Setup", f"{setup.get('coordination')} + {setup.get('continuity')}")
+    continuation = payload.get("continuation") or {}
+    _append_line(lines, "Next best action", continuation.get("next_best_action"))
+    _append_line(lines, "Safe stop point", continuation.get("safe_stop_point"))
+    parts = recommendation.get("task_parts") or payload.get("task_parts") or []
+    if parts:
+        lines.append("Task parts:")
+        lines.extend(_human_task_part_lines(parts))
+    timeline = payload.get("timeline") or []
+    if timeline:
+        lines.append("Timeline:")
+        for item in timeline[:5]:
+            marker = " now" if item.get("is_now") else ""
+            lines.append(f"- {item.get('label')}: {item.get('summary')}{marker}")
+    return "\n".join(lines)
+
+
+def _human_render_list_tasks(payload: dict) -> str:
+    lines = [f"Tasks: {payload.get('count', 0)}"]
+    for task in payload.get("tasks", []):
+        lines.append(f"- {task.get('task_id')}: {task.get('status')} | {task.get('task')}")
+    return "\n".join(lines)
+
+
+def _human_render_confirm(payload: dict) -> str:
+    lines = [f"Task {payload.get('task_id')}", "Task confirmed."]
+    plan = payload.get("confirmed_plan") or payload.get("phase") or {}
+    setup = plan.get("setup") or {}
+    if setup:
+        _append_line(lines, "Setup", f"{setup.get('coordination')} + {setup.get('continuity')}")
+    parts = plan.get("task_parts") or []
+    if parts:
+        lines.append("Task parts:")
+        lines.extend(_human_task_part_lines(parts))
+    launch_bundle = payload.get("launch_bundle") or []
+    if launch_bundle:
+        lines.append(f"Launch bundle: {len(launch_bundle)} part(s) ready.")
+    continuation = payload.get("continuation") or {}
+    _append_line(lines, "Next best action", continuation.get("next_best_action"))
+    _append_line(lines, "Safe stop point", continuation.get("safe_stop_point"))
+    return "\n".join(lines)
+
+
+def _human_render_checkpoint(payload: dict) -> str:
+    lines = [f"Task {payload.get('task_id')}", "Checkpoint recorded."]
+    _append_line(lines, "Recommended outcome", payload.get("recommended_outcome"))
+    _append_line(lines, "Recommended action", payload.get("recommended_action"))
+    _append_line(lines, "Notes", payload.get("notes"))
+    if payload.get("report_count") is not None:
+        _append_line(lines, "Reports", payload.get("report_count"))
+    reports = payload.get("reports") or []
+    if reports:
+        lines.append("Part outcomes:")
+        for report in reports:
+            lines.append(f"- {report.get('part_id')}: {report.get('recommended_outcome')}")
+    return "\n".join(lines)
+
+
+def _human_render_advance(payload: dict) -> str:
+    lines = [f"Task {payload.get('task_id')}", "Task advanced."]
+    phase = payload.get("phase") or {}
+    setup = phase.get("setup") or {}
+    if setup:
+        _append_line(lines, "New setup", f"{setup.get('coordination')} + {setup.get('continuity')}")
+    parts = phase.get("task_parts") or []
+    if parts:
+        lines.append("Current task parts:")
+        lines.extend(_human_task_part_lines(parts))
+    _append_line(lines, "Applied action", payload.get("applied_action"))
+    _append_line(lines, "Reason", payload.get("change_reason"))
+    return "\n".join(lines)
+
+
+def _human_render_resume(payload: dict) -> str:
+    lines = [f"Task {payload.get('task_id')}", "Resume summary."]
+    _append_line(lines, "Status", payload.get("status"))
+    _append_line(lines, "Resume scope", payload.get("resume_scope"))
+    remaining = payload.get("remaining_part_ids") or []
+    if remaining:
+        _append_line(lines, "Remaining parts", ", ".join(remaining))
+    continuation = payload.get("continuation") or {}
+    _append_line(lines, "Next best action", continuation.get("next_best_action"))
+    launch_bundle = payload.get("launch_bundle") or []
+    if launch_bundle:
+        lines.append(f"Launch bundle: {len(launch_bundle)} part(s) ready.")
+    return "\n".join(lines)
+
+
+def _human_render_consolidation(payload: dict) -> str:
+    lines = [f"Task {payload.get('task_id')}", "Consolidation packet ready."]
+    _append_line(lines, "Phase", payload.get("phase_id"))
+    _append_line(lines, "Reports", payload.get("report_count"))
+    _append_line(lines, "Builder report included", "yes" if payload.get("contains_builder_report") else "no")
+    _append_line(lines, "Reviewer report included", "yes" if payload.get("contains_reviewer_report") else "no")
+    return "\n".join(lines)
+
+
+def _human_render_reflection(payload: dict) -> str:
+    lines = [f"Task {payload.get('task_id')}", "Reflection recorded."]
+    reflection = payload.get("reflection") or {}
+    _append_line(lines, "Split worth it", reflection.get("split_worth_it"))
+    _append_line(lines, "Tool fit", reflection.get("tool_fit"))
+    _append_line(lines, "Simpler better", reflection.get("simpler_better"))
+    _append_line(lines, "Applied", "yes" if payload.get("applied") else "no")
+    learning = payload.get("learning_summary") or {}
+    _append_line(lines, "Lookback count", learning.get("lookback_count"))
+    return "\n".join(lines)
+
+
+def render_taskflow_payload(payload: dict, *, command_name: str) -> str:
+    if command_name in {"start-task", "answer-task"}:
+        if payload.get("stage") == "clarification":
+            return _human_render_clarification(payload)
+        if payload.get("stage") == "recommendation":
+            return _human_render_recommendation(payload)
+    if command_name == "show-task":
+        return _human_render_show_task(payload)
+    if command_name == "list-tasks":
+        return _human_render_list_tasks(payload)
+    if command_name == "confirm-task":
+        return _human_render_confirm(payload)
+    if command_name in {"checkpoint-task", "checkpoint-phase"}:
+        return _human_render_checkpoint(payload)
+    if command_name == "advance-task":
+        return _human_render_advance(payload)
+    if command_name in {"resume-task", "resume-handoff"}:
+        return _human_render_resume(payload)
+    if command_name == "render-consolidation-packet":
+        return _human_render_consolidation(payload)
+    if command_name == "reflect-task":
+        return _human_render_reflection(payload)
+    return json.dumps(payload, indent=2)
+
+
+def print_taskflow_payload(payload: dict, *, format_name: str, command_name: str) -> None:
+    output_format = _resolve_output_format(format_name)
+    if output_format == "human":
+        print(render_taskflow_payload(payload, command_name=command_name))
+        return
     print(json.dumps(payload, indent=2))
 
 
@@ -3180,7 +3401,7 @@ def command_start_task(args: argparse.Namespace) -> int:
     except ValueError as error:
         message, details = taskflow.parse_failure(error)
         fail(message, details=details)
-    print_taskflow_payload(payload)
+    print_taskflow_payload(payload, format_name=args.format, command_name="start-task")
     return 0
 
 
@@ -3213,7 +3434,7 @@ def command_answer_task(args: argparse.Namespace) -> int:
     except ValueError as error:
         message, details = taskflow.parse_failure(error)
         fail(message, details=details)
-    print_taskflow_payload(payload)
+    print_taskflow_payload(payload, format_name=args.format, command_name="answer-task")
     return 0
 
 
@@ -3232,7 +3453,7 @@ def command_show_task(args: argparse.Namespace) -> int:
     except ValueError as error:
         message, details = taskflow.parse_failure(error)
         fail(message, details=details)
-    print_taskflow_payload(payload)
+    print_taskflow_payload(payload, format_name=args.format, command_name="show-task")
     return 0
 
 
@@ -3251,7 +3472,7 @@ def command_list_tasks(args: argparse.Namespace) -> int:
     except ValueError as error:
         message, details = taskflow.parse_failure(error)
         fail(message, details=details)
-    print_taskflow_payload(payload)
+    print_taskflow_payload(payload, format_name=args.format, command_name="list-tasks")
     return 0
 
 
@@ -3275,7 +3496,7 @@ def command_confirm_task(args: argparse.Namespace) -> int:
     except ValueError as error:
         message, details = taskflow.parse_failure(error)
         fail(message, details=details)
-    print_taskflow_payload(payload)
+    print_taskflow_payload(payload, format_name=args.format, command_name="confirm-task")
     return 0
 
 
@@ -3303,7 +3524,7 @@ def command_checkpoint_task(args: argparse.Namespace) -> int:
     except ValueError as error:
         message, details = taskflow.parse_failure(error)
         fail(message, details=details)
-    print_taskflow_payload(payload)
+    print_taskflow_payload(payload, format_name=args.format, command_name="checkpoint-task")
     return 0
 
 
@@ -3328,7 +3549,7 @@ def command_checkpoint_phase(args: argparse.Namespace) -> int:
     except ValueError as error:
         message, details = taskflow.parse_failure(error)
         fail(message, details=details)
-    print_taskflow_payload(payload)
+    print_taskflow_payload(payload, format_name=args.format, command_name="checkpoint-phase")
     return 0
 
 
@@ -3354,7 +3575,7 @@ def command_advance_task(args: argparse.Namespace) -> int:
     except ValueError as error:
         message, details = taskflow.parse_failure(error)
         fail(message, details=details)
-    print_taskflow_payload(payload)
+    print_taskflow_payload(payload, format_name=args.format, command_name="advance-task")
     return 0
 
 
@@ -3374,7 +3595,7 @@ def command_resume_task(args: argparse.Namespace) -> int:
     except ValueError as error:
         message, details = taskflow.parse_failure(error)
         fail(message, details=details)
-    print_taskflow_payload(payload)
+    print_taskflow_payload(payload, format_name=args.format, command_name="resume-task")
     return 0
 
 
@@ -3395,7 +3616,7 @@ def command_resume_handoff(args: argparse.Namespace) -> int:
     except ValueError as error:
         message, details = taskflow.parse_failure(error)
         fail(message, details=details)
-    print_taskflow_payload(payload)
+    print_taskflow_payload(payload, format_name=args.format, command_name="resume-handoff")
     return 0
 
 
@@ -3419,7 +3640,7 @@ def command_render_task_part(args: argparse.Namespace) -> int:
     if args.format == "markdown":
         print(payload["markdown"], end="")
     else:
-        print_taskflow_payload(payload)
+        print_taskflow_payload(payload, format_name=args.format, command_name="render-task-part")
     return 0
 
 
@@ -3443,7 +3664,7 @@ def command_render_consolidation_packet(args: argparse.Namespace) -> int:
     if args.format == "markdown":
         print(payload["markdown"], end="")
     else:
-        print_taskflow_payload(payload)
+        print_taskflow_payload(payload, format_name=args.format, command_name="render-consolidation-packet")
     return 0
 
 
@@ -3467,7 +3688,7 @@ def command_reflect_task(args: argparse.Namespace) -> int:
     except ValueError as error:
         message, details = taskflow.parse_failure(error)
         fail(message, details=details)
-    print_taskflow_payload(payload)
+    print_taskflow_payload(payload, format_name=args.format, command_name="reflect-task")
     return 0
 
 
@@ -3498,6 +3719,15 @@ def add_task_context_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--task-scope", choices=["workspace", "project"])
 
 
+def add_taskflow_format_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--format",
+        choices=["auto", "json", "human"],
+        default="auto",
+        help="Render human-readable output in an interactive terminal, or JSON for scripts.",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="RelayKit: coordinate multiple AI coding agents working in parallel, with human checkpoints between phases."
@@ -3510,6 +3740,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Start a RelayKit intake flow and return the next clarification question or recommendation.",
     )
     add_task_context_arguments(parser_start_task)
+    add_taskflow_format_argument(parser_start_task)
     parser_start_task.add_argument("--task", required=True)
     parser_start_task.add_argument("--allowed-host", action="append")
     parser_start_task.add_argument("--skip-clarification", action="store_true")
@@ -3521,6 +3752,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Answer the current RelayKit clarification question.",
     )
     add_task_context_arguments(parser_answer_task)
+    add_taskflow_format_argument(parser_answer_task)
     parser_answer_task.add_argument("--task-id", required=True)
     parser_answer_task.add_argument("--question-id")
     parser_answer_task.add_argument("--answer")
@@ -3532,6 +3764,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Show the current state of a RelayKit task and lane-planning instance.",
     )
     add_task_context_arguments(parser_show_task)
+    add_taskflow_format_argument(parser_show_task)
     parser_show_task.add_argument("--task-id", required=True)
     parser_show_task.add_argument("--debug", action="store_true")
     parser_show_task.set_defaults(func=command_show_task)
@@ -3541,6 +3774,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="List RelayKit tasks under the current workspace or project storage root.",
     )
     add_task_context_arguments(parser_list_tasks)
+    add_taskflow_format_argument(parser_list_tasks)
     parser_list_tasks.add_argument("--status", action="append", help="Filter by one or more task statuses.")
     parser_list_tasks.set_defaults(func=command_list_tasks)
 
@@ -3549,6 +3783,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Accept a RelayKit lane recommendation or request changes.",
     )
     add_task_context_arguments(parser_confirm_task)
+    add_taskflow_format_argument(parser_confirm_task)
     parser_confirm_task.add_argument("--task-id", required=True)
     parser_confirm_task.add_argument("--accept", action="store_true")
     parser_confirm_task.add_argument("--change")
@@ -3564,6 +3799,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Record a checkpoint for a RelayKit task that is running across one or more lanes.",
     )
     add_task_context_arguments(parser_checkpoint_task)
+    add_taskflow_format_argument(parser_checkpoint_task)
     parser_checkpoint_task.add_argument("--task-id", required=True)
     parser_checkpoint_task.add_argument("--part-id", help="The task part being checkpointed.")
     parser_checkpoint_task.add_argument("--outcome", choices=sorted(taskflow.CHECKPOINT_OUTCOMES))
@@ -3578,6 +3814,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Record a batch checkpoint for multiple task parts in the current phase.",
     )
     add_task_context_arguments(parser_checkpoint_phase)
+    add_taskflow_format_argument(parser_checkpoint_phase)
     parser_checkpoint_phase.add_argument("--task-id", required=True)
     parser_checkpoint_phase.add_argument("--phase-id")
     parser_checkpoint_phase.add_argument(
@@ -3602,6 +3839,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Apply the latest checkpoint action or an explicit setup/phase change.",
     )
     add_task_context_arguments(parser_advance_task)
+    add_taskflow_format_argument(parser_advance_task)
     parser_advance_task.add_argument("--task-id", required=True)
     parser_advance_task.add_argument("--action", choices=sorted(taskflow.CHECKPOINT_ACTIONS))
     parser_advance_task.add_argument("--change-reason", choices=sorted(taskflow.CHANGE_REASONS))
@@ -3615,6 +3853,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Resume a RelayKit task and get continuation guidance for the active lanes.",
     )
     add_task_context_arguments(parser_resume_task)
+    add_taskflow_format_argument(parser_resume_task)
     parser_resume_task.add_argument("--task-id", required=True)
     parser_resume_task.add_argument("--verbosity", choices=sorted(taskflow.RESUME_VERBOSITIES), default="compact")
     parser_resume_task.set_defaults(func=command_resume_task)
@@ -3624,6 +3863,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Return a ready-to-run handoff bundle for the remaining or requested task parts.",
     )
     add_task_context_arguments(parser_resume_handoff)
+    add_taskflow_format_argument(parser_resume_handoff)
     parser_resume_handoff.add_argument("--task-id", required=True)
     parser_resume_handoff.add_argument("--part-id")
     parser_resume_handoff.add_argument("--verbosity", choices=sorted(taskflow.HANDOFF_VERBOSITIES), default="ultra-compact")
@@ -3656,6 +3896,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Propose or record a post-task RelayKit reflection about lane split, tool fit, and overhead.",
     )
     add_task_context_arguments(parser_reflect_task)
+    add_taskflow_format_argument(parser_reflect_task)
     parser_reflect_task.add_argument("--task-id", required=True)
     parser_reflect_task.add_argument("--split-worth-it", choices=sorted(taskflow.REFLECTION_VALUES))
     parser_reflect_task.add_argument("--tool-fit", choices=sorted(taskflow.TOOL_FIT_VALUES))
