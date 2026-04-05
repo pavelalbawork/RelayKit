@@ -6,7 +6,56 @@ RelayKit augments existing harnesses like Codex, Claude Code, Gemini CLI, and An
 
 Task intake, lane recommendation, onboarding, checkpoints, handoffs, and learning are the main mechanisms. They exist to make existing harnesses behave like one operator-directed system.
 
-## Install
+## Quick Start
+
+Install RelayKit:
+
+```bash
+pipx install -e /path/to/relaykit
+```
+
+Wire your host:
+
+```bash
+relaykit setup --host codex
+```
+
+Swap `codex` for `claude-code`, `gemini-cli`, or `antigravity`.
+
+Then restart your host and say:
+
+```text
+Use RelayKit MCP tools directly and help me finish setup if anything is still missing.
+```
+
+That is the main first-use path. Most users should stop there.
+
+## If That Fails
+
+If `pipx` is unavailable or your Python setup blocks it, use the built-in fallback:
+
+```bash
+python3 scripts/relaykit.py install-self
+python3 scripts/relaykit.py setup --host codex --force
+```
+
+Then restart your host and use the same prompt:
+
+```text
+Use RelayKit MCP tools directly and help me finish setup if anything is still missing.
+```
+
+## What `setup` Does
+
+`relaykit setup` is the normal onboarding command. It:
+
+- wires the selected host
+- runs a safe local smoke test
+- prints the exact next prompt for that host
+
+Use `relaykit host-status --host <host>` when you want a readiness check without changing anything.
+
+## More Install Options
 
 **Recommended — `pipx` (global, no activation needed):**
 
@@ -20,22 +69,6 @@ relaykit-mcp --help
 
 The installed `relaykit-mcp` entry point is the preferred MCP launch path across Codex, Claude Code, Gemini CLI, and Antigravity. It avoids raw source-tree config and keeps host wiring consistent.
 
-**Skills only — zero dependencies (optional fallback):**
-
-```bash
-cp -r skills/ ~/.claude/skills/
-```
-
-Copies the skill surface directly. No Python required. Use this only if you want portable RelayKit skills without the CLI or MCP server. For Codex, Claude Code, Gemini CLI, and Antigravity, the normal `pipx` install plus `setup` path is the preferred setup.
-
-**Fastest fallback on Homebrew Python — one command, venv-safe:**
-
-```bash
-python3 scripts/relaykit.py install-self
-```
-
-Use this when `pipx` is unavailable or you hit the Homebrew Python `externally-managed-environment` error.
-
 **Manual venv — explicit fallback:**
 
 ```bash
@@ -48,48 +81,13 @@ relaykit-mcp --help
 
 With the venv flow, use the full venv path in any MCP config: `.venv/bin/relaykit-mcp`.
 
-## Harness Setup
-
-After install, run one command to wire your harness, run a safe local smoke test, and print the exact next prompt for that harness:
+**Skills only — zero dependencies (optional fallback):**
 
 ```bash
-relaykit setup --current-host
+cp -r skills/ ~/.claude/skills/
 ```
 
-`--current-host` auto-detects Codex today. For Claude Code, Gemini CLI, and Antigravity, pass `--host` explicitly unless you export `RELAYKIT_HOST`.
-
-Supported auto-wiring targets currently include Codex, Claude Code, Gemini CLI, and Antigravity.
-
-To preview changes without applying them:
-
-```bash
-relaykit setup --current-host --dry-run
-```
-
-To run the reusable local lifecycle proof by itself:
-
-```bash
-relaykit smoke --current-host
-```
-
-Other onboarding commands:
-
-```bash
-relaykit host-status --current-host        # check what's wired and what's missing
-relaykit setup --host codex                # bootstrap, smoke, and print the next Codex prompt
-relaykit acknowledge-host --current-host   # defer onboarding without being asked again
-relaykit uninstall-host --current-host     # remove RelayKit-managed wiring
-relaykit doctor --current-host             # validate the full setup
-```
-
-Use `setup` for normal first use. Use `host-status` when a harness wants to inspect readiness before prompting, and use `bootstrap-host` only when you want the wiring step without the bundled smoke run.
-
-Fastest full local bring-up when you also want onboarding:
-
-```bash
-python3 scripts/relaykit.py install-self
-python3 scripts/relaykit.py setup --current-host --force
-```
+Copies the skill surface directly. No Python required. Use this only if you want portable RelayKit skills without the CLI or MCP server.
 
 ## MCP Server
 
