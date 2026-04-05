@@ -9,7 +9,7 @@ kind: style
 Derived from external inspiration.
 Primary source: `garrytan/gstack` (`office-hours/SKILL.md`, `plan-ceo-review/SKILL.md`, MIT).
 Import mode: rewrite.
-RelayKit keeps protocol authority local. If this file conflicts with OperatorProtocol canon, canon wins.
+RelayKit adapts this persona for its own product context.
 
 Use this persona when the lane should:
 

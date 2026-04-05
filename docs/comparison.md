@@ -2,24 +2,22 @@
 
 ## Summary
 
-Both products are about harness augmentation for multi-tool, human-in-the-loop parallel execution.
+Both are about harness augmentation for multi-tool, human-in-the-loop parallel execution.
 
-They serve different use cases:
+The difference is simple:
 
-- `RelayKit` is a focused product surface for day-to-day harness augmentation.
-- `RelayPack` is an expanded runtime with more validation, protocol, and experimentation surfaces.
+- `RelayKit` is the product you install and use day to day.
+- `RelayPack` is the broader maintainer/runtime surface for validation, experiments, and protocol-heavy comparison work.
 
 ## Comparison Table
 
 | Dimension | RelayKit | RelayPack |
 |---|---|---|
-| Primary role | Focused product surface | Expanded runtime surface |
-| Default use | Daily install and product surface | Validation, comparison, experimentation, protocol-heavy work |
-| Main story | Harness augmentation under operator control | Harness augmentation plus validator lab and canon |
+| Best for | Daily operator use | Maintainers and comparison work |
+| Main focus | Product workflow | Validation, experiments, and broader runtime surfaces |
 | Runtime surfaces | CLI, MCP, skills, profiles | CLI, MCP, skills, profiles, validation, protocol fixtures |
-| Onboarding | Product-facing harness onboarding | Product-facing onboarding plus broader host/runtime experiments |
-| Docs posture | Cleaner public surface | Larger and more protocol-heavy |
-| Share with users | Yes, by default | When they need the broader runtime surface |
+| Onboarding | Cleaner first-use path | Broader host and runtime comparison work |
+| Docs posture | Product-oriented | More protocol- and maintainer-oriented |
 
 ## Practical Rule
 
@@ -27,18 +25,7 @@ Use `RelayKit` when you want the cleanest product for coordinating multiple harn
 
 Use `RelayPack` when you need:
 
-- protocol canon
-- larger validation flows
+- validation suites
 - host adaptation experiments
 - comparison work
-
-## Install Pattern
-
-You can install both into the same environment and compare them directly:
-
-```bash
-python -m pip install -e /Users/palba/Projects/Orchestration/RelayKit
-python -m pip install -e /Users/palba/Projects/Orchestration/RelayPack
-relaykit --version
-relaypack --version
-```
+- protocol-heavy maintainer surfaces

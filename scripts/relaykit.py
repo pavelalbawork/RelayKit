@@ -1385,7 +1385,7 @@ def persona_scaffold_content(
                 "Derived from external inspiration.",
                 f"Primary source: `{source}`.",
                 "Import mode: rewrite.",
-                "RelayKit keeps protocol authority local. If this file conflicts with OperatorProtocol canon, canon wins.",
+                "RelayKit adapts this persona for its own product context.",
                 "",
             ]
         )

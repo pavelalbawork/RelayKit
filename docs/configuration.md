@@ -37,7 +37,7 @@ Presets are starting-point lane maps. The registry ships with examples:
 
 | Preset | Intent |
 |---|---|
-| `balanced-default` | Human-directed multi-harness default: planning on Claude, execution on Codex |
+| `balanced-default` | Human-directed multi-harness default for everyday multi-host work |
 | `cost-aware` | Minimize premium credits |
 | `custom` | Empty — define your own topology |
 

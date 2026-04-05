@@ -5,7 +5,6 @@ license: MIT
 compatibility:
   hosts:
     - Codex
-    - Claude Code
     - Antigravity
     - Gemini CLI
     - Generic file-based skill hosts

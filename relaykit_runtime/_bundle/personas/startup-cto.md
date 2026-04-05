@@ -9,7 +9,7 @@ kind: hybrid
 Derived from external inspiration.
 Primary source: `alirezarezvani/claude-skills` (`agents/personas/startup-cto.md`, MIT).
 Import mode: rewrite.
-RelayKit keeps protocol authority local. If this file conflicts with OperatorProtocol canon, canon wins.
+RelayKit adapts this persona for its own product context.
 
 Use this persona when the lane should prefer:
 

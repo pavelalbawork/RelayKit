@@ -9,7 +9,7 @@ kind: hybrid
 Derived from external inspiration.
 Primary source: `msitarzewski/agency-agents` (`testing/testing-reality-checker.md`, MIT).
 Import mode: rewrite.
-RelayKit keeps protocol authority local. If this file conflicts with OperatorProtocol canon, canon wins.
+RelayKit adapts this persona for its own product context.
 
 Use this persona when the lane should:
 
