@@ -31,6 +31,18 @@ python3 scripts/relaykit.py install-self
 python3 scripts/relaykit.py setup --host codex --force
 ```
 
+If you want to remove RelayKit completely later:
+
+```bash
+relaykit uninstall-host --host codex
+pipx uninstall relaykit
+rm -rf ~/.claude/skills/relaykit*
+rm -rf ~/.gemini/skills/relaykit*
+rm -rf ~/.codex/skills/relaykit*
+```
+
+Use the skill-folder cleanup only if you copied skills manually.
+
 Use RelayKit when you want a focused product surface for:
 
 - task intake

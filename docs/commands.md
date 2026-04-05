@@ -110,6 +110,20 @@ relaykit resume-handoff --workspace-root . --task-id <id>
 
 Use `resume-task` for the operator summary and `resume-handoff` when you need the remaining-part launch packets directly.
 
+**Remove RelayKit from a machine completely:**
+```bash
+relaykit uninstall-host --host codex
+relaykit uninstall-host --host claude-code
+relaykit uninstall-host --host gemini-cli
+relaykit uninstall-host --host antigravity
+pipx uninstall relaykit
+rm -rf ~/.claude/skills/relaykit*
+rm -rf ~/.gemini/skills/relaykit*
+rm -rf ~/.codex/skills/relaykit*
+```
+
+Only remove the skill folders if you copied them manually with the skills-only fallback.
+
 ## MCP Tools
 
 The MCP server exposes the operational RelayKit commands as tools prefixed with `relaykit_`:

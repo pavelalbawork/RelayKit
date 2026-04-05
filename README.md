@@ -45,6 +45,45 @@ Then restart your host and use the same prompt:
 Use RelayKit MCP tools directly and help me finish setup if anything is still missing.
 ```
 
+## Remove RelayKit Completely
+
+If you want a clean uninstall, do it in this order:
+
+1. remove RelayKit-managed host wiring
+2. uninstall the package
+3. delete copied skill folders only if you used the skills-only fallback
+
+Remove host wiring:
+
+```bash
+relaykit uninstall-host --host codex
+relaykit uninstall-host --host claude-code
+relaykit uninstall-host --host gemini-cli
+relaykit uninstall-host --host antigravity
+```
+
+Uninstall the package:
+
+```bash
+pipx uninstall relaykit
+```
+
+If you installed RelayKit into a manual virtualenv instead of `pipx`, remove that venv or run `pip uninstall relaykit` inside it.
+
+If you copied skills manually, remove those folders too:
+
+```bash
+rm -rf ~/.claude/skills/relaykit*
+rm -rf ~/.gemini/skills/relaykit*
+rm -rf ~/.codex/skills/relaykit*
+```
+
+If you want your agent to help with cleanup, say:
+
+```text
+Remove RelayKit from this machine completely, including host wiring and any copied skill folders.
+```
+
 ## What `setup` Does
 
 `relaykit setup` is the normal onboarding command. It:
