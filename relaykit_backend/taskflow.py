@@ -371,6 +371,54 @@ def orchestration_guidance(state: dict[str, Any]) -> list[str]:
     return dedupe(guidance)
 
 
+def orchestration_contract(state: dict[str, Any]) -> list[str]:
+    task_id = state.get("task_id", "<id>")
+    return [
+        "Confirm the RelayKit task before real work starts.",
+        "Checkpoint after the first concrete artifact, blocker, or verified finding.",
+        "Advance immediately when RelayKit reports `blocked`, `needs_reroute`, or `ready_for_next_phase`.",
+        f"If work moved ahead without orchestration progress, run `relaykit.py resume-task --task-id {task_id}` and bring the control plane forward before continuing.",
+    ]
+
+
+def orchestration_required_action(state: dict[str, Any]) -> dict[str, Any] | None:
+    task_id = state.get("task_id", "<id>")
+    status = state.get("status")
+    current = current_phase(state)
+    recent_files = _recent_repo_activity(state)
+    checkpointed = _phase_checkpointed_parts(current) if current else []
+
+    if status == "recommended":
+        return {
+            "kind": "confirm",
+            "urgency": "required_before_work",
+            "message": "Confirm or change the setup before any real work starts.",
+            "suggested_command": f"relaykit.py confirm-task --task-id {task_id} --accept",
+        }
+    if status in {"blocked", "needs_reroute", "ready_for_next_phase"}:
+        return {
+            "kind": "advance",
+            "urgency": "required_now",
+            "message": "Advance the task now. Do not keep working in the old phase.",
+            "suggested_command": f"relaykit.py advance-task --task-id {task_id}",
+        }
+    if status in {"active", "launched"} and current is not None and recent_files and not checkpointed:
+        part_id = None
+        parts = current.get("task_parts") or []
+        if len(parts) == 1:
+            part_id = parts[0].get("part_id")
+        suggested = f"relaykit.py checkpoint-task --task-id {task_id}"
+        if part_id:
+            suggested += f" --part-id {part_id}"
+        return {
+            "kind": "checkpoint",
+            "urgency": "required_now",
+            "message": "Work is happening, but RelayKit has no checkpoint yet. Record a checkpoint before continuing.",
+            "suggested_command": suggested,
+        }
+    return None
+
+
 def slugify(text: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
     return slug[:40] or "task"
@@ -771,6 +819,155 @@ def _compact_execution_context(execution_context: dict[str, Any] | None) -> dict
     return payload
 
 
+def issue_status_path(root: Path, profile_dirname: str) -> Path:
+    return root / profile_dirname / "issue-status.json"
+
+
+def _source_doc_candidates(state: dict[str, Any]) -> list[Path]:
+    roots = [
+        Path(root)
+        for root in [state.get("project_root"), state.get("workspace_root"), state.get("storage_root")]
+        if root
+    ]
+    text = " ".join(
+        [
+            state["task"]["original"],
+            state["task"].get("scope_boundaries") or "",
+            state["task"].get("definition_of_done") or "",
+            state["task"].get("verification") or "",
+            state["task"].get("constraints_text") or "",
+        ]
+    )
+    raw_matches = re.findall(r"(?:/[\w .\-/]+\.md|[\w./-]+\.md)", text)
+    candidates: list[Path] = []
+    seen: set[str] = set()
+    for raw in raw_matches:
+        raw = raw.strip("`'\".,)")
+        path = Path(raw).expanduser()
+        options = [path] if path.is_absolute() else [root / path for root in roots]
+        for candidate in options:
+            resolved = candidate.resolve()
+            if resolved.exists() and resolved.is_file():
+                key = str(resolved)
+                if key not in seen:
+                    seen.add(key)
+                    candidates.append(resolved)
+    return candidates
+
+
+def load_issue_status_summary(root: Path, profile_dirname: str) -> dict[str, Any]:
+    path = issue_status_path(root, profile_dirname)
+    if not path.exists():
+        return {"version": 1, "sources": {}}
+    payload = read_json(path)
+    sources = payload.get("sources")
+    if not isinstance(sources, dict):
+        payload["sources"] = {}
+    return payload
+
+
+def save_issue_status_summary(root: Path, profile_dirname: str, payload: dict[str, Any]) -> Path:
+    path = issue_status_path(root, profile_dirname)
+    write_json(path, payload)
+    return path
+
+
+def _issue_category(section: str, title: str) -> str:
+    text = f"{section} {title}".lower()
+    if any(token in text for token in ["security", "secret", "credential", "keychain", "oauth", "auth"]):
+        return "security"
+    if any(token in text for token in ["ui", "menu bar", "icon", "button", "view", "window", "frontend", "swiftui"]):
+        return "frontend"
+    if any(token in text for token in ["cleanup", "housekeeping", "stale", "empty dir", "remove", "delete"]):
+        return "cleanup"
+    if any(token in text for token in ["test", "verify", "verification", "review", "critique"]):
+        return "verification"
+    return "backend"
+
+
+def parse_issue_inventory(state: dict[str, Any]) -> list[dict[str, Any]]:
+    profile_dirname = state.get("profile_dirname") or ".relaykit"
+    root = Path(state.get("storage_root") or ".")
+    status_summary = load_issue_status_summary(root, profile_dirname)
+    sources = status_summary.get("sources", {})
+    inventory: list[dict[str, Any]] = []
+    for doc in _source_doc_candidates(state):
+        source_key = str(doc)
+        source_statuses = sources.get(source_key, {}).get("issues", {}) if isinstance(sources.get(source_key), dict) else {}
+        section = ""
+        for line in doc.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if stripped.startswith("## "):
+                section = stripped[3:].strip()
+                continue
+            match = re.match(r"###\s+(?:\d+\.\s+)?(.+)", stripped)
+            if not match:
+                continue
+            title = match.group(1).strip()
+            issue_id = slugify(title)
+            status = source_statuses.get(issue_id, {}).get("status", "open")
+            inventory.append(
+                {
+                    "issue_id": issue_id,
+                    "title": title,
+                    "section": section or "general",
+                    "category": _issue_category(section, title),
+                    "status": status,
+                    "source_path": source_key,
+                }
+            )
+    return inventory
+
+
+def _issue_inventory_summary(issue_inventory: list[dict[str, Any]]) -> dict[str, Any]:
+    open_issues = [item for item in issue_inventory if item.get("status") == "open"]
+    categories = {item.get("category") for item in open_issues if item.get("category")}
+    return {
+        "count": len(issue_inventory),
+        "open_count": len(open_issues),
+        "categories": sorted(categories),
+        "sources": dedupe([item.get("source_path") for item in issue_inventory if item.get("source_path")]),
+        "mixed_packet": len(categories.intersection({"frontend", "backend", "security", "cleanup"})) >= 2,
+    }
+
+
+def mark_issue_inventory_addressed(
+    *,
+    root: Path,
+    profile_dirname: str,
+    issue_inventory: list[dict[str, Any]],
+    task_id: str,
+) -> dict[str, Any]:
+    payload = load_issue_status_summary(root, profile_dirname)
+    sources = payload.setdefault("sources", {})
+    updated: list[dict[str, Any]] = []
+    for item in issue_inventory:
+        if item.get("status") != "open":
+            continue
+        source_path = item.get("source_path")
+        issue_id = item.get("issue_id")
+        if not isinstance(source_path, str) or not isinstance(issue_id, str):
+            continue
+        source_entry = sources.setdefault(source_path, {"issues": {}, "updated_at": None})
+        issues = source_entry.setdefault("issues", {})
+        issues[issue_id] = {
+            "status": "addressed-unverified",
+            "task_id": task_id,
+            "updated_at": now_iso(),
+            "title": item.get("title"),
+            "section": item.get("section"),
+            "category": item.get("category"),
+        }
+        source_entry["updated_at"] = now_iso()
+        updated.append({"source_path": source_path, "issue_id": issue_id, "status": "addressed-unverified"})
+    save_issue_status_summary(root, profile_dirname, payload)
+    return {
+        "updated_count": len(updated),
+        "updated_issues": updated,
+        "state_path": str(issue_status_path(root, profile_dirname)),
+    }
+
+
 def _ultra_compact_execution_context(execution_context: dict[str, Any] | None) -> dict[str, Any] | None:
     compact = _compact_execution_context(execution_context)
     if not compact:
@@ -806,6 +1003,9 @@ def classify_task(state: dict[str, Any], registry: dict[str, Any]) -> dict[str, 
     implementation_matches = _keyword_matches(text, IMPLEMENTATION_KEYWORDS)
     bugfix_matches = _keyword_matches(text, BUGFIX_KEYWORDS)
     pause_matches = _keyword_matches(text, PAUSE_KEYWORDS)
+    issue_inventory = parse_issue_inventory(state)
+    issue_summary = _issue_inventory_summary(issue_inventory)
+    issue_categories = set(issue_summary["categories"])
     flags = {
         "frontend": bool(frontend_matches),
         "review": bool(review_matches),
@@ -814,7 +1014,17 @@ def classify_task(state: dict[str, Any], registry: dict[str, Any]) -> dict[str, 
         "bugfix": bool(bugfix_matches),
         "pause_sensitive": bool(pause_matches),
         "cross_project": state["scope"] == "workspace",
+        "security": "security" in issue_categories,
+        "cleanup": "cleanup" in issue_categories,
+        "mixed_packet": bool(issue_summary["mixed_packet"]),
     }
+    if issue_categories.intersection({"frontend"}):
+        flags["frontend"] = True
+    if issue_categories.intersection({"backend", "security", "cleanup"}):
+        flags["implementation"] = True
+        flags["bugfix"] = True
+    if "verification" in issue_categories:
+        flags["review"] = True
     if pre_implementation_research:
         flags["implementation"] = False
         flags["bugfix"] = False
@@ -825,6 +1035,9 @@ def classify_task(state: dict[str, Any], registry: dict[str, Any]) -> dict[str, 
     elif pre_implementation_research or (flags["research"] and not flags["implementation"]):
         task_type = "exploratory"
         archetype = "research-plan"
+    elif flags["mixed_packet"]:
+        task_type = "execution-ready"
+        archetype = "mixed-repair"
     elif flags["frontend"] and flags["implementation"]:
         task_type = "execution-ready"
         archetype = "frontend-polish"
@@ -868,6 +1081,8 @@ def classify_task(state: dict[str, Any], registry: dict[str, Any]) -> dict[str, 
         "flags": flags,
         "pre_implementation_research": pre_implementation_research,
         "remaining_uncertainty": remaining_uncertainty,
+        "issue_inventory": issue_inventory,
+        "issue_summary": issue_summary,
     }
 
 
@@ -957,6 +1172,17 @@ def preferred_host_for_role(state: dict[str, Any], archetype: str, role: str) ->
     return None
 
 
+def avoided_host_for_role(state: dict[str, Any], archetype: str, role: str) -> str | None:
+    bucket = learned_archetype_preferences(state, archetype)
+    host_map = bucket.get("avoid_hosts_by_role", {})
+    if not isinstance(host_map, dict):
+        return None
+    avoided = host_map.get(role)
+    if isinstance(avoided, str) and avoided:
+        return avoided
+    return None
+
+
 def preferred_setup_for_archetype(state: dict[str, Any], archetype: str) -> tuple[str | None, str | None]:
     bucket = learned_archetype_preferences(state, archetype)
     preferred_setup = bucket.get("preferred_setup")
@@ -978,6 +1204,7 @@ def choose_host_model(
     classification: dict[str, Any],
     preferred_lane: dict[str, Any] | None = None,
     learned_preferred_host: str | None = None,
+    learned_avoided_host: str | None = None,
 ) -> dict[str, Any]:
     allowed_hosts = inventory["effective_hosts"]
     allowed_models = inventory["effective_models_by_host"]
@@ -1054,6 +1281,11 @@ def choose_host_model(
         candidates = sorted(
             candidates,
             key=lambda item: (0 if item[0] == learned_preferred_host else 1, item[0]),
+        )
+    if learned_avoided_host:
+        candidates = sorted(
+            candidates,
+            key=lambda item: (1 if item[0] == learned_avoided_host else 0, item[0]),
         )
 
     for host_name, models, credit_pool in candidates:
@@ -1137,6 +1369,7 @@ def choose_task_parts(
     research_required = flags["research"] or force_research
     pre_implementation_research = bool(classification.get("pre_implementation_research"))
     task_type = classification["task_type"]
+    issue_summary = classification.get("issue_summary") or {}
     if task_type == "review-only":
         return [
             {
@@ -1182,6 +1415,44 @@ def choose_task_parts(
                         "lane_hint": "planner",
                     }
                 )
+        return parts
+
+    if flags.get("mixed_packet"):
+        parts = [
+            {
+                "part_id": "core-repair",
+                "name": "core repair",
+                "objective": "Fix the backend, security, auth, and cleanup items with bounded scope and clear verification.",
+                "role": "builder",
+                "capabilities": ["implementation", "repo_edit", "verification"],
+                "lane_hint": "builder",
+            }
+        ]
+        if flags["frontend"]:
+            parts.append(
+                {
+                    "part_id": "ui-repair",
+                    "name": "ui repair",
+                    "objective": "Fix the user-facing issues without taking ownership of the whole packet.",
+                    "role": "builder",
+                    "capabilities": ["frontend", "browser", "implementation"],
+                    "lane_hint": "frontend-builder",
+                }
+            )
+        if coordination == "coordinated":
+            parts.append(
+                {
+                    "part_id": "verification",
+                    "name": "verification",
+                    "objective": "Verify the repaired issue set, challenge any unresolved assumptions, and decide whether the packet can close.",
+                    "role": "reviewer" if continuity == "full" else "critic",
+                    "capabilities": ["review", "verification", "critique"],
+                    "lane_hint": "reviewer" if continuity == "full" else "critic",
+                }
+            )
+        if issue_summary.get("open_count"):
+            for part in parts:
+                part["objective"] += f" Source issue set currently shows {issue_summary['open_count']} open items."
         return parts
 
     parts: list[dict[str, Any]] = []
@@ -1386,11 +1657,16 @@ def _build_learned_influence(
     bucket = learned_archetype_preferences(state, archetype)
     count = bucket.get("count", 0)
     reasons: list[str] = []
+    avoided_setup = bucket.get("avoid_setup") if isinstance(bucket.get("avoid_setup"), str) else None
 
     if applied_learned_setup and count >= 2:
         setup_str = "+".join(p for p in [learned_coordination, learned_continuity] if p)
         reasons.append(
             f"Based on {count} prior `{archetype}` tasks, you preferred `{setup_str}` coordination."
+        )
+    elif avoided_setup:
+        reasons.append(
+            f"Prior `{archetype}` reflections marked `{avoided_setup}` as a bad fit, so RelayKit avoided treating it as a default preference."
         )
 
     for part in assigned_parts:
@@ -1408,6 +1684,7 @@ def _build_learned_influence(
         ) or None,
         "applied_setup": applied_learned_setup is not None,
         "prior_task_count": count,
+        "avoided_setup": avoided_setup,
         "reasoning": reasons if reasons else ["No learned preferences applied — using defaults."],
     }
 
@@ -1632,6 +1909,11 @@ def setup_recommendation(
                 classification["archetype"],
                 part["role"],
             ),
+            learned_avoided_host=avoided_host_for_role(
+                state,
+                classification["archetype"],
+                part["role"],
+            ),
         )
         skill_name = ROLE_TO_SKILL.get(part["role"], "contributor")
         persona_name = recommended_persona(
@@ -1766,6 +2048,7 @@ def setup_recommendation(
         },
         "delivery_mode": delivery_mode,
         "notable_exclusions": notable_exclusions,
+        "source_issues": classification.get("issue_summary"),
         "next_step": next_step,
         "confirm_prompt": confirm_prompt,
         "internal_preset": preset_name,
@@ -1856,6 +2139,7 @@ def list_tasks(
 
 def build_summary_markdown(state: dict[str, Any]) -> str:
     recommendation = state.get("recommendation") or {}
+    required_action = orchestration_required_action(state)
     lines = [
         f"# RelayKit Task {state['task_id']}",
         "",
@@ -1873,11 +2157,12 @@ def build_summary_markdown(state: dict[str, Any]) -> str:
                 f"- Setup: `{recommendation['setup']['coordination']} + {recommendation['setup']['continuity']}`",
                 f"- Confidence: `{recommendation['confidence']['level']}`",
                 f"- Coordination overhead: `{recommendation['overhead']['coordination']}`",
-                "",
-                "## Task Parts",
-                "",
             ]
         )
+        source_issues = recommendation.get("source_issues") or {}
+        if source_issues.get("count"):
+            lines.append(f"- Source issues: `{source_issues.get('open_count', 0)}` open / `{source_issues.get('count')}` total")
+        lines.extend(["", "## Task Parts", ""])
         for part in recommendation.get("task_parts", []):
             assignment = part["assignment"]
             line = f"- `{part['name']}` -> `{assignment['host']}` / `{assignment['model']}`"
@@ -1900,12 +2185,24 @@ def build_summary_markdown(state: dict[str, Any]) -> str:
                 f"- Resume instructions: {state.get('continuation', {}).get('resume_instructions', 'Run `relaykit.py resume-task --task-id <id>` to continue.')}",
             ]
         )
+        if required_action:
+            lines.extend(
+                [
+                    "",
+                    "## Required Action",
+                    "",
+                    f"- {required_action['message']}",
+                    f"- Suggested command: `{required_action['suggested_command']}`",
+                ]
+            )
         if drift:
             lines.extend(["", "## Drift Warnings", ""])
             lines.extend([f"- {item}" for item in drift])
         if guidance:
             lines.extend(["", "## Orchestration Guidance", ""])
             lines.extend([f"- {item}" for item in guidance])
+        lines.extend(["", "## Orchestration Contract", ""])
+        lines.extend([f"- {item}" for item in orchestration_contract(state)])
     return "\n".join(lines) + "\n"
 
 
@@ -2117,6 +2414,8 @@ def generate_learning_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
                 "hosts_by_role": {},
                 "worth_it": {},
                 "tool_fit": {},
+                "bad_setup_counts": {},
+                "bad_hosts_by_role": {},
             },
         )
         bucket["count"] += 1
@@ -2135,6 +2434,15 @@ def generate_learning_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
         bucket["worth_it"][worth_it] = bucket["worth_it"].get(worth_it, 0) + 1
         tool_fit = record.get("tool_fit", "unknown")
         bucket["tool_fit"][tool_fit] = bucket["tool_fit"].get(tool_fit, 0) + 1
+        if tool_fit == "bad":
+            bucket["bad_setup_counts"][setup] = bucket["bad_setup_counts"].get(setup, 0) + 1
+            for assignment in record.get("selected_assignments", []):
+                role = assignment.get("role")
+                host_name = assignment.get("host")
+                if not isinstance(role, str) or not isinstance(host_name, str):
+                    continue
+                role_bucket = bucket["bad_hosts_by_role"].setdefault(role, {})
+                role_bucket[host_name] = role_bucket.get(host_name, 0) + 1
         solo_count = sum(
             count
             for setup, count in bucket["coordination_modes"].items()
@@ -2147,23 +2455,35 @@ def generate_learning_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
         )
         simpler_yes = bucket["worth_it"].get("no", 0) + bucket["worth_it"].get("mixed", 0)
         simpler_no = bucket["worth_it"].get("yes", 0)
+        good_or_neutral = bucket["tool_fit"].get("good", 0) + bucket["tool_fit"].get("unknown", 0)
+        bad = bucket["tool_fit"].get("bad", 0)
         preferred_setup = None
-        if solo_count >= 2 and solo_count >= coordinated_count:
+        if good_or_neutral >= bad and solo_count >= 2 and solo_count >= coordinated_count:
             preferred_setup = "solo+lean"
-        elif coordinated_count >= 2 and simpler_no >= simpler_yes:
+        elif good_or_neutral >= bad and coordinated_count >= 2 and simpler_no >= simpler_yes:
             preferred_setup = "coordinated+full"
         if preferred_setup is not None:
             bucket["preferred_setup"] = preferred_setup
-        preferred_hosts_by_role: dict[str, str] = {}
-        for role, host_counts in bucket["hosts_by_role"].items():
-            total = sum(host_counts.values())
-            if total < 2:
-                continue
-            preferred_host, preferred_count = max(host_counts.items(), key=lambda item: item[1])
-            if preferred_count / total >= 0.6:
-                preferred_hosts_by_role[role] = preferred_host
-        if preferred_hosts_by_role:
-            bucket["preferred_hosts_by_role"] = preferred_hosts_by_role
+        if good_or_neutral >= bad:
+            preferred_hosts_by_role: dict[str, str] = {}
+            for role, host_counts in bucket["hosts_by_role"].items():
+                total = sum(host_counts.values())
+                if total < 2:
+                    continue
+                preferred_host, preferred_count = max(host_counts.items(), key=lambda item: item[1])
+                if preferred_count / total >= 0.6:
+                    preferred_hosts_by_role[role] = preferred_host
+            if preferred_hosts_by_role:
+                bucket["preferred_hosts_by_role"] = preferred_hosts_by_role
+        elif bucket["bad_setup_counts"]:
+            avoid_setup, _count = max(bucket["bad_setup_counts"].items(), key=lambda item: item[1])
+            bucket["avoid_setup"] = avoid_setup
+            avoid_hosts_by_role: dict[str, str] = {}
+            for role, host_counts in bucket["bad_hosts_by_role"].items():
+                avoid_host, _ = max(host_counts.items(), key=lambda item: item[1])
+                avoid_hosts_by_role[role] = avoid_host
+            if avoid_hosts_by_role:
+                bucket["avoid_hosts_by_role"] = avoid_hosts_by_role
     for archetype, bucket in summary["archetypes"].items():
         yes = bucket["worth_it"].get("yes", 0)
         no = bucket["worth_it"].get("no", 0)
@@ -2349,6 +2669,8 @@ def maybe_recommend(
         "task_id": state["task_id"],
         "stage": "recommendation",
         "recommendation": recommendation,
+        "required_action": orchestration_required_action(state),
+        "orchestration_contract": orchestration_contract(state),
         "summary_path": str(summary_path(Path(state["storage_root"]), registry["defaults"]["profile_dirname"], state["task_id"])),
     }
 
@@ -2546,6 +2868,8 @@ def apply_change_request(
         "task_id": state["task_id"],
         "stage": "recommendation",
         "recommendation": recommendation,
+        "required_action": orchestration_required_action(state),
+        "orchestration_contract": orchestration_contract(state),
     }
 
 
@@ -2608,7 +2932,11 @@ def confirm_task(
         launch_bundle = build_launch_bundle(state, recommendation["task_parts"], registry, verbosity="ultra-compact")
     state["continuation"] = {
         "current_state": "The task is confirmed and ready to run.",
-        "next_best_action": "Launch the bundled task parts." if launch_bundle else "Start the first task part with the assigned tool and model.",
+        "next_best_action": (
+            "Launch the bundled task parts, then checkpoint as soon as the first concrete artifact, blocker, or verified finding appears."
+            if launch_bundle
+            else "Start the first task part with the assigned tool and model, then checkpoint as soon as the first concrete artifact, blocker, or verified finding appears."
+        ),
         "optional_parallel_follow_up": "None." if recommendation["setup"]["coordination"] == "solo" else "Start the secondary task part only after the primary lane is clearly underway.",
         "safe_stop_point": "You can stop after the first task part has a concrete result or blocker.",
         "resume_instructions": f"Run `relaykit.py resume-task --task-id {state['task_id']}` to continue.",
@@ -2619,6 +2947,8 @@ def confirm_task(
         "confirmed_plan": recommendation,
         "phase": phase,
         "continuation": state["continuation"],
+        "required_action": orchestration_required_action(state),
+        "orchestration_contract": orchestration_contract(state),
     }
     if launch_bundle:
         payload["launch_bundle"] = launch_bundle
@@ -2746,6 +3076,8 @@ def checkpoint_task(
         "apply_command": f"relaykit.py advance-task --task-id {task_id}",
         "checkpoint_policy": matched_part.get("checkpoint_policy", "gate") if matched_part else "gate",
         "report_markdown_captured": bool(report_markdown),
+        "required_action": orchestration_required_action(state),
+        "orchestration_contract": orchestration_contract(state),
     }
     latest_event = phase["history"][-1] if phase.get("history") else {}
     if latest_event.get("phase_warnings"):
@@ -2968,6 +3300,8 @@ def checkpoint_phase(
         "safe_stop_point": state["continuation"]["safe_stop_point"],
         "resume_instructions": state["continuation"]["resume_instructions"],
         "apply_command": f"relaykit.py advance-task --task-id {task_id}",
+        "required_action": orchestration_required_action(state),
+        "orchestration_contract": orchestration_contract(state),
     }
     if aggregate_warnings:
         payload["phase_warnings"] = dedupe(aggregate_warnings)
@@ -3145,10 +3479,14 @@ def resume_task(
     }
     drift = state_drift_warnings(state)
     guidance = orchestration_guidance(state)
+    required_action = orchestration_required_action(state)
     if drift:
         payload["drift_warnings"] = drift
     if guidance:
         payload["orchestration_guidance"] = guidance
+    if required_action:
+        payload["required_action"] = required_action
+    payload["orchestration_contract"] = orchestration_contract(state)
     if verbosity == "verbose":
         payload["summary"] = state.get("continuation", {})
         payload["recommendation"] = state.get("confirmed_plan") or state.get("recommendation")
@@ -3357,7 +3695,7 @@ def advance_task(
         state["status"] = "active"
         state["continuation"] = {
             "current_state": "Setup kept in place after the latest checkpoint.",
-            "next_best_action": "Continue with the current task part until the next concrete result or blocker.",
+            "next_best_action": "Continue with the current task part, then checkpoint again at the next concrete result, blocker, or verified finding.",
             "optional_parallel_follow_up": "",
             "safe_stop_point": "Safe to stop now.",
             "resume_instructions": f"Run `relaykit.py resume-task --task-id {task_id}` to continue.",
@@ -3370,6 +3708,8 @@ def advance_task(
             "action": effective_action,
             "phase_id": current["phase_id"],
             "continuation": state["continuation"],
+            "required_action": orchestration_required_action(state),
+            "orchestration_contract": orchestration_contract(state),
         }
         if verbosity == "verbose":
             payload["state_path"] = str(state_file)
@@ -3424,7 +3764,7 @@ def advance_task(
     state["status"] = "active" if new_plan["setup"]["continuity"] == "full" else "launched"
     state["continuation"] = {
         "current_state": f"Started `{new_phase['label']}` with action `{effective_action}`.",
-        "next_best_action": "Start the first task part in the new phase with the assigned tool and model.",
+        "next_best_action": "Start the first task part in the new phase, then checkpoint after the first concrete artifact, blocker, or verified finding.",
         "optional_parallel_follow_up": "None." if new_plan["setup"]["coordination"] == "solo" else "Bring up secondary parts only after the main part is underway.",
         "safe_stop_point": "Safe to stop now." if effective_action == "pause_for_research" else "Better to continue until the new phase has a concrete result.",
         "resume_instructions": f"Run `relaykit.py resume-task --task-id {task_id}` to continue.",
@@ -3437,6 +3777,8 @@ def advance_task(
         "action": effective_action,
         "phase": _phase_summary(new_phase) if verbosity == "compact" else new_phase,
         "continuation": state["continuation"],
+        "required_action": orchestration_required_action(state),
+        "orchestration_contract": orchestration_contract(state),
     }
     if verbosity == "verbose":
         payload["confirmed_plan"] = new_plan
@@ -3466,6 +3808,8 @@ def inspect_task(
         "latest_checkpoint": latest_checkpoint_event(state),
         "drift_warnings": state_drift_warnings(state),
         "orchestration_guidance": orchestration_guidance(state),
+        "required_action": orchestration_required_action(state),
+        "orchestration_contract": orchestration_contract(state),
     }
 
 
@@ -3572,6 +3916,8 @@ def show_task(
         "timeline": _build_timeline(state),
         "drift_warnings": state_drift_warnings(state),
         "orchestration_guidance": orchestration_guidance(state),
+        "required_action": orchestration_required_action(state),
+        "orchestration_contract": orchestration_contract(state),
     }
     phase = current_phase(state)
     if phase is not None:
@@ -4356,6 +4702,16 @@ def reflect_task(
     log_path = learning_log_path(root, profile_dirname)
     append_jsonl(log_path, final_record)
     summary = refresh_learning_summary(root, registry)
+    issue_updates = None
+    issue_inventory = (state.get("classification") or {}).get("issue_inventory") or []
+    task_text = task_summary_text(state).lower()
+    if issue_inventory and any(token in task_text for token in ["fix", "address", "resolve"]):
+        issue_updates = mark_issue_inventory_addressed(
+            root=root,
+            profile_dirname=profile_dirname,
+            issue_inventory=issue_inventory,
+            task_id=task_id,
+        )
     state["reflection"].append(final_record)
     state["layers"]["learned_tendencies"] = summary
     state["status"] = "reflected"
@@ -4369,4 +4725,6 @@ def reflect_task(
             "summary_path": str(summary_file),
         }
     )
+    if issue_updates:
+        payload["source_artifact_updates"] = issue_updates
     return payload

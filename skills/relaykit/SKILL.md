@@ -40,9 +40,12 @@ This skill does not replace the role skills. It chooses and loads them cleanly s
 
 1. Run `relaykit start-task --workspace-root <root> --task "<task>" [--project-root <project>]`.
 2. Keep answering `answer-task` until RelayKit returns a recommendation, unless the user explicitly wants to skip the question phase.
-3. Confirm the recommendation with `confirm-task`, or request changes.
-4. If the task is continuing in full mode, use `checkpoint-task`, `advance-task`, `resume-task`, and `reflect-task` as needed.
-5. Load the matching role skill, host guide, model note, persona, packet, or repo guide from the resolved task parts.
+3. Confirm the recommendation with `confirm-task`, or request changes. Do not let real work start while the task is still only recommended.
+4. Once work starts, checkpoint after the first concrete artifact, blocker, or verified finding. Do not wait until the whole task is done.
+5. If RelayKit reports `blocked`, `needs_reroute`, or `ready_for_next_phase`, use `advance-task` immediately instead of continuing in the old phase.
+6. If repo work moved ahead without orchestration progress, run `resume-task`, summarize the required action, and bring RelayKit forward before continuing.
+7. If the task is continuing in full mode, use `checkpoint-task`, `advance-task`, `resume-task`, and `reflect-task` as needed.
+8. Load the matching role skill, host guide, model note, persona, packet, or repo guide from the resolved task parts.
 
 ## Practical Rule
 
@@ -59,3 +62,4 @@ Use `advanced stack` or `advanced render-prompt-stack` only when you already kno
 - Do not hard-bind a role to one tool when RelayKit can recommend a better multi-harness setup.
 - Do not skip the clarification phase unless the user explicitly asks to do so.
 - Do not dump the whole protocol into context if the resolved task parts already give the minimal load order.
+- Do not paste raw RelayKit MCP payloads back to the user when a short summary would do. Summarize the verdict, setup, required action, and next command instead.

@@ -3223,10 +3223,22 @@ def _human_render_recommendation(payload: dict) -> str:
     research = recommendation.get("research", {})
     if research.get("summary") and research.get("mode") != "none":
         _append_line(lines, "Research note", research.get("summary"))
+    source_issues = recommendation.get("source_issues") or {}
+    if source_issues.get("count"):
+        _append_line(lines, "Source issues", f"{source_issues.get('open_count', 0)} open / {source_issues.get('count')} total")
     parts = recommendation.get("task_parts", [])
     if parts:
         lines.append("Task parts:")
         lines.extend(_human_task_part_lines(parts))
+    required_action = payload.get("required_action") or {}
+    if required_action:
+        _append_line(lines, "Required action", required_action.get("message"))
+        _append_line(lines, "Suggested command", required_action.get("suggested_command"))
+    contract = payload.get("orchestration_contract") or []
+    if contract:
+        lines.append("Orchestration contract:")
+        for item in contract:
+            lines.append(f"- {item}")
     _append_line(lines, "Next step", recommendation.get("next_step"))
     _append_line(lines, "Confirm prompt", recommendation.get("confirm_prompt"))
     _append_line(lines, "State", payload.get("state_path"))
@@ -3256,10 +3268,24 @@ def _human_render_show_task(payload: dict) -> str:
     continuation = payload.get("continuation") or {}
     _append_line(lines, "Next best action", continuation.get("next_best_action"))
     _append_line(lines, "Safe stop point", continuation.get("safe_stop_point"))
+    required_action = payload.get("required_action") or {}
+    if required_action:
+        _append_line(lines, "Required action", required_action.get("message"))
+        _append_line(lines, "Suggested command", required_action.get("suggested_command"))
     parts = recommendation.get("task_parts") or payload.get("task_parts") or []
     if parts:
         lines.append("Task parts:")
         lines.extend(_human_task_part_lines(parts))
+    drift = payload.get("drift_warnings") or []
+    if drift:
+        lines.append("Drift warnings:")
+        for item in drift:
+            lines.append(f"- {item}")
+    guidance = payload.get("orchestration_guidance") or []
+    if guidance:
+        lines.append("Orchestration guidance:")
+        for item in guidance:
+            lines.append(f"- {item}")
     timeline = payload.get("timeline") or []
     if timeline:
         lines.append("Timeline:")
@@ -3296,6 +3322,15 @@ def _human_render_confirm(payload: dict) -> str:
     continuation = payload.get("continuation") or {}
     _append_line(lines, "Next best action", continuation.get("next_best_action"))
     _append_line(lines, "Safe stop point", continuation.get("safe_stop_point"))
+    required_action = payload.get("required_action") or {}
+    if required_action:
+        _append_line(lines, "Required action", required_action.get("message"))
+        _append_line(lines, "Suggested command", required_action.get("suggested_command"))
+    contract = payload.get("orchestration_contract") or []
+    if contract:
+        lines.append("Orchestration contract:")
+        for item in contract:
+            lines.append(f"- {item}")
     return "\n".join(lines)
 
 
@@ -3311,6 +3346,15 @@ def _human_render_checkpoint(payload: dict) -> str:
         lines.append("Part outcomes:")
         for report in reports:
             lines.append(f"- {report.get('part_id')}: {report.get('recommended_outcome')}")
+    required_action = payload.get("required_action") or {}
+    if required_action:
+        _append_line(lines, "Required action", required_action.get("message"))
+        _append_line(lines, "Suggested command", required_action.get("suggested_command"))
+    warnings = payload.get("phase_warnings") or []
+    if warnings:
+        lines.append("Phase warnings:")
+        for item in warnings:
+            lines.append(f"- {item}")
     return "\n".join(lines)
 
 
@@ -3326,6 +3370,10 @@ def _human_render_advance(payload: dict) -> str:
         lines.extend(_human_task_part_lines(parts))
     _append_line(lines, "Applied action", payload.get("applied_action"))
     _append_line(lines, "Reason", payload.get("change_reason"))
+    required_action = payload.get("required_action") or {}
+    if required_action:
+        _append_line(lines, "Required action", required_action.get("message"))
+        _append_line(lines, "Suggested command", required_action.get("suggested_command"))
     return "\n".join(lines)
 
 
@@ -3338,9 +3386,23 @@ def _human_render_resume(payload: dict) -> str:
         _append_line(lines, "Remaining parts", ", ".join(remaining))
     continuation = payload.get("continuation") or {}
     _append_line(lines, "Next best action", continuation.get("next_best_action"))
+    required_action = payload.get("required_action") or {}
+    if required_action:
+        _append_line(lines, "Required action", required_action.get("message"))
+        _append_line(lines, "Suggested command", required_action.get("suggested_command"))
     launch_bundle = payload.get("launch_bundle") or []
     if launch_bundle:
         lines.append(f"Launch bundle: {len(launch_bundle)} part(s) ready.")
+    drift = payload.get("drift_warnings") or []
+    if drift:
+        lines.append("Drift warnings:")
+        for item in drift:
+            lines.append(f"- {item}")
+    guidance = payload.get("orchestration_guidance") or []
+    if guidance:
+        lines.append("Orchestration guidance:")
+        for item in guidance:
+            lines.append(f"- {item}")
     return "\n".join(lines)
 
 
@@ -3362,6 +3424,10 @@ def _human_render_reflection(payload: dict) -> str:
     _append_line(lines, "Applied", "yes" if payload.get("applied") else "no")
     learning = payload.get("learning_summary") or {}
     _append_line(lines, "Lookback count", learning.get("lookback_count"))
+    issue_updates = payload.get("source_artifact_updates") or {}
+    if issue_updates.get("updated_count"):
+        _append_line(lines, "Source issues updated", issue_updates.get("updated_count"))
+        _append_line(lines, "Issue state", issue_updates.get("state_path"))
     return "\n".join(lines)
 
 

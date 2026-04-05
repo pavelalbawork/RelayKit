@@ -116,10 +116,14 @@ relaykit reflect-task --workspace-root . --task-id <id> --split-worth-it yes --t
 
 RelayKit now also surfaces `drift_warnings` and `orchestration_guidance` in `show-task`, `resume-task`, and `inspect-task` when repo activity is moving faster than the orchestration state. If files are changing but the task is still only recommended, or an active phase has real work but no checkpoint yet, RelayKit will tell the operator to confirm or advance the task instead of silently lagging behind.
 
+For critique-driven follow-up work, RelayKit now tracks source issue inventories from referenced Markdown docs and can mark reflected fix packets as `addressed-unverified`. That gives later tasks a structured issue state instead of treating every old critique line as permanently open backlog.
+
 Operational rule:
 - run `confirm-task` before real work starts
 - run `checkpoint-task` or `checkpoint-phase` after the first concrete artifact, blocker, or verified finding
 - run `advance-task` as soon as RelayKit says `blocked`, `needs_reroute`, or `ready_for_next_phase`
+- if `show-task` or `resume-task` returns `required_action`, do that next instead of continuing off-ledger
+- when using the MCP server, summarize RelayKit’s human-readable result for the user instead of echoing raw payloads
 
 **Interrupted lean task:**
 ```bash
@@ -159,3 +163,5 @@ relaykit setup --host codex --host claude-code --host gemini-cli --host antigrav
 The MCP server exposes the operational RelayKit commands as tools prefixed with `relaykit_`:
 
 `relaykit_start_task`, `relaykit_answer_task`, `relaykit_confirm_task`, `relaykit_show_task`, `relaykit_list_tasks`, `relaykit_checkpoint_task`, `relaykit_checkpoint_phase`, `relaykit_prepare_git`, `relaykit_advance_task`, `relaykit_resume_task`, `relaykit_resume_handoff`, `relaykit_render_task_part`, `relaykit_render_consolidation_packet`, `relaykit_reflect_task`, `relaykit_host_status`, `relaykit_guided_setup`, `relaykit_setup`, `relaykit_bootstrap_host`, `relaykit_uninstall_host`, `relaykit_acknowledge_host`, `relaykit_install_self`, `relaykit_smoke`, `relaykit_doctor`, `relaykit_list`, `relaykit_preset`, `relaykit_stack`, `relaykit_render_prompt_stack`, `relaykit_init_workspace`, `relaykit_init_project`, `relaykit_init_persona`.
+
+For the main lifecycle tools, MCP text content is now human-readable by default and structured content still carries the full payload. Agents should prefer the human summary unless the user explicitly asks for raw JSON.

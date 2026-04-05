@@ -50,6 +50,7 @@ Operational timing rules:
 - checkpoint after the first concrete artifact, blocker, or verified finding
 - advance the task immediately when RelayKit reports `blocked`, `needs_reroute`, or `ready_for_next_phase`
 - if repo work is happening while RelayKit still says `recommended`, stop and bring the orchestration state forward
+- if RelayKit returns a required action, treat it as the next command, not a suggestion to maybe follow later
 
 ## Output Contract
 
@@ -59,9 +60,11 @@ Always leave behind:
 - the active lane map or routing change
 - the next valid command
 - the blocking risk if work cannot continue cleanly
+- a human summary of the RelayKit state instead of raw MCP argument dumps
 
 ## Stop Rules
 
 - Do not silently expand scope.
 - Do not take over another lane's packet unless ownership is explicitly transferred.
 - Do not split work just because multiple tools exist.
+- Do not keep coding after RelayKit says `blocked`, `needs_reroute`, or `ready_for_next_phase`.

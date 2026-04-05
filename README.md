@@ -6,6 +6,8 @@ RelayKit augments existing harnesses like Codex, Claude Code, Gemini CLI, and An
 
 Task intake, lane recommendation, onboarding, checkpoints, handoffs, and learning are the main mechanisms. They exist to make existing harnesses behave like one operator-directed system.
 
+RelayKit now also keeps lightweight issue state for critique-driven work, so old review docs do not have to act like permanent backlog forever.
+
 ## Quick Start
 
 Install RelayKit:
@@ -63,6 +65,13 @@ Then restart your host and say:
 ```text
 Use RelayKit MCP tools directly.
 ```
+
+When the host starts using RelayKit, the operator rhythm should stay explicit:
+
+- confirm the task before real work starts
+- checkpoint after the first concrete artifact, blocker, or verified finding
+- advance immediately on `blocked`, `needs_reroute`, or `ready_for_next_phase`
+- summarize RelayKit state for the user instead of pasting raw MCP payloads
 
 If you want your host to reach for RelayKit earlier on multi-tool work, add this instruction to your host or workspace guidance:
 
@@ -137,6 +146,8 @@ Remove RelayKit from this machine completely, including host wiring and any copi
 - prints concise next steps for entering the MCP path
 
 In a normal terminal, `setup` now prints a short human-readable summary by default. Use `--format json` if you want the full machine payload.
+
+The RelayKit MCP server also returns human-readable text content for the main task lifecycle tools while keeping the full machine payload in structured content. Agents should show the summary, not paste raw JSON back to the user.
 
 The setup smoke is pinned to the host you selected, so `relaykit setup --host codex` verifies a Codex-only path instead of drifting to another host during the smoke recommendation.
 

@@ -77,6 +77,13 @@ def make_text_result(
     return result
 
 
+def make_taskflow_result(payload: dict[str, Any], *, command_name: str) -> dict[str, Any]:
+    text = relaykit.render_taskflow_payload(payload, command_name=command_name)
+    structured = dict(payload)
+    structured["display_text"] = text
+    return make_text_result(text, structured=structured)
+
+
 def validate_registry_or_fail() -> dict[str, Any]:
     registry = relaykit.load_registry()
     issues = relaykit.validate_registry(registry)
@@ -141,7 +148,7 @@ def tool_doctor(arguments: dict[str, Any]) -> dict[str, Any]:
     )
     if execution_context_paths:
         payload["execution_context_paths"] = execution_context_paths
-    return make_text_result(json_text(payload), structured=payload)
+    return make_taskflow_result(payload, command_name="start-task")
 
 
 def tool_host_status(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -187,7 +194,7 @@ def tool_setup(arguments: dict[str, Any]) -> dict[str, Any]:
         force=bool(arguments.get("force")),
         dry_run=bool(arguments.get("dry_run")),
     )
-    return make_text_result(json_text(payload), structured=payload)
+    return make_taskflow_result(payload, command_name="setup")
 
 
 def tool_uninstall_host(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -228,7 +235,7 @@ def tool_smoke(arguments: dict[str, Any]) -> dict[str, Any]:
         workspace_root=workspace_root,
         force=bool(arguments.get("force")),
     )
-    return make_text_result(json_text(payload), structured=payload)
+    return make_taskflow_result(payload, command_name="smoke")
 
 
 def tool_acknowledge_host(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -510,7 +517,7 @@ def tool_answer_task(arguments: dict[str, Any]) -> dict[str, Any]:
         state_file, summary_file = taskflow.save_task_state(state, registry)
         payload["state_path"] = str(state_file)
         payload["summary_path"] = str(summary_file)
-        return make_text_result(json_text(payload), structured=payload)
+        return make_taskflow_result(payload, command_name="answer-task")
     answer = arguments.get("answer")
     if not answer:
         raise ValueError("answer is required unless skip_clarification=true")
@@ -523,7 +530,7 @@ def tool_answer_task(arguments: dict[str, Any]) -> dict[str, Any]:
         workspace_profile=workspace_profile,
         project_profile=project_profile,
     )
-    return make_text_result(json_text(payload), structured=payload)
+    return make_taskflow_result(payload, command_name="answer-task")
 
 
 def tool_show_task(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -539,7 +546,7 @@ def tool_show_task(arguments: dict[str, Any]) -> dict[str, Any]:
         payload = taskflow.inspect_task(registry, root=storage_root, task_id=task_id)
     else:
         payload = taskflow.show_task(registry, root=storage_root, task_id=task_id)
-    return make_text_result(json_text(payload), structured=payload)
+    return make_taskflow_result(payload, command_name="show-task")
 
 
 def tool_list_tasks(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -553,7 +560,7 @@ def tool_list_tasks(arguments: dict[str, Any]) -> dict[str, Any]:
         root=storage_root,
         status_filter=arguments.get("status"),
     )
-    return make_text_result(json_text(payload), structured=payload)
+    return make_taskflow_result(payload, command_name="confirm-task")
 
 
 def tool_confirm_task(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -575,7 +582,7 @@ def tool_confirm_task(arguments: dict[str, Any]) -> dict[str, Any]:
         workspace_profile=workspace_profile,
         project_profile=project_profile,
     )
-    return make_text_result(json_text(payload), structured=payload)
+    return make_taskflow_result(payload, command_name="checkpoint-task")
 
 
 def tool_checkpoint_task(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -598,7 +605,7 @@ def tool_checkpoint_task(arguments: dict[str, Any]) -> dict[str, Any]:
         report_markdown=arguments.get("report_markdown"),
         verbosity=arguments.get("verbosity", "compact"),
     )
-    return make_text_result(json_text(payload), structured=payload)
+    return make_taskflow_result(payload, command_name="checkpoint-phase")
 
 
 def tool_checkpoint_phase(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -621,7 +628,7 @@ def tool_checkpoint_phase(arguments: dict[str, Any]) -> dict[str, Any]:
         reports=reports,
         verbosity=arguments.get("verbosity", "compact"),
     )
-    return make_text_result(json_text(payload), structured=payload)
+    return make_taskflow_result(payload, command_name="advance-task")
 
 
 def tool_prepare_git(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -641,7 +648,7 @@ def tool_prepare_git(arguments: dict[str, Any]) -> dict[str, Any]:
         project_profile=project_profile,
         dry_run=bool(arguments.get("dry_run", False)),
     )
-    return make_text_result(json_text(payload), structured=payload)
+    return make_taskflow_result(payload, command_name="resume-task")
 
 
 def tool_advance_task(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -665,7 +672,7 @@ def tool_advance_task(arguments: dict[str, Any]) -> dict[str, Any]:
         project_profile=project_profile,
         verbosity=arguments.get("verbosity", "compact"),
     )
-    return make_text_result(json_text(payload), structured=payload)
+    return make_taskflow_result(payload, command_name="resume-handoff")
 
 
 def tool_resume_task(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -724,7 +731,7 @@ def tool_render_task_part(arguments: dict[str, Any]) -> dict[str, Any]:
         part_id=part_id,
         verbosity=arguments.get("verbosity", "compact"),
     )
-    return make_text_result(payload["markdown"], structured=payload)
+    return make_taskflow_result(payload, command_name="render-consolidation-packet")
 
 
 def tool_render_consolidation_packet(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -765,7 +772,7 @@ def tool_reflect_task(arguments: dict[str, Any]) -> dict[str, Any]:
         notes=arguments.get("notes"),
         apply=bool(arguments.get("apply", False)),
     )
-    return make_text_result(json_text(payload), structured=payload)
+    return make_taskflow_result(payload, command_name="reflect-task")
 
 
 TOOLS: dict[str, dict[str, Any]] = {
@@ -1051,7 +1058,7 @@ TOOLS: dict[str, dict[str, Any]] = {
         "handler": tool_init_persona,
     },
     "relaykit_start_task": {
-        "description": "Use when the user wants to parallelize work, split work across tools, use all their tools, or assign different lanes before execution starts. Starts RelayKit intake from free text and returns the next clarification question or recommendation.",
+        "description": "Use when the user wants to parallelize work, split work across tools, use all their tools, or assign different lanes before execution starts. Starts RelayKit intake from free text and returns the next clarification question or recommendation. After a recommendation appears, confirm it before real work starts.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -1071,7 +1078,7 @@ TOOLS: dict[str, dict[str, Any]] = {
         "handler": tool_start_task,
     },
     "relaykit_answer_task": {
-        "description": "Answer the current clarification question for a RelayKit task or skip remaining clarification to get a recommendation.",
+        "description": "Answer the current clarification question for a RelayKit task or skip remaining clarification to get a recommendation. Keep answering until RelayKit reaches a recommendation, then confirm it before starting work.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -1091,7 +1098,7 @@ TOOLS: dict[str, dict[str, Any]] = {
         "handler": tool_answer_task,
     },
     "relaykit_show_task": {
-        "description": "Show the current state of a RelayKit task, with optional debug reasoning layers.",
+        "description": "Show the current state of a RelayKit task, including any required orchestration action, drift warnings, and optional debug reasoning layers.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -1125,7 +1132,7 @@ TOOLS: dict[str, dict[str, Any]] = {
         "handler": tool_list_tasks,
     },
     "relaykit_confirm_task": {
-        "description": "Accept a RelayKit setup recommendation or request changes after clarification is complete. Lean-path confirmations include bundled launch packets for the current task parts.",
+        "description": "Accept a RelayKit setup recommendation or request changes after clarification is complete. Lean-path confirmations include bundled launch packets for the current task parts. After confirmation, RelayKit becomes the control plane: checkpoint after the first concrete artifact, blocker, or verified finding.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -1145,7 +1152,7 @@ TOOLS: dict[str, dict[str, Any]] = {
         "handler": tool_confirm_task,
     },
     "relaykit_checkpoint_task": {
-        "description": "Record a checkpoint and get continuation guidance for a RelayKit task after work begins.",
+        "description": "Record a checkpoint and get continuation guidance for a RelayKit task after work begins. Use proactively after the first concrete artifact, blocker, or verified finding instead of waiting until the end.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -1186,7 +1193,7 @@ TOOLS: dict[str, dict[str, Any]] = {
         "handler": tool_checkpoint_task,
     },
     "relaykit_checkpoint_phase": {
-        "description": "Record a batch checkpoint for multiple task parts in the current phase and get one aggregated next action.",
+        "description": "Record a batch checkpoint for multiple task parts in the current phase and get one aggregated next action. Use this when several lanes reached a meaningful result and the orchestration layer needs an explicit phase decision.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -1247,7 +1254,7 @@ TOOLS: dict[str, dict[str, Any]] = {
         "handler": tool_prepare_git,
     },
     "relaykit_advance_task": {
-        "description": "Apply the latest checkpoint action or an explicit setup change and start the next task phase.",
+        "description": "Apply the latest checkpoint action or an explicit setup change and start the next task phase. Use immediately when RelayKit reports `blocked`, `needs_reroute`, or `ready_for_next_phase`; do not keep working in the old phase.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -1269,7 +1276,7 @@ TOOLS: dict[str, dict[str, Any]] = {
         "handler": tool_advance_task,
     },
     "relaykit_resume_task": {
-        "description": "Resume a RelayKit task and get operator-facing summary plus targeted resume questions when needed.",
+        "description": "Resume a RelayKit task and get the operator-facing summary, any required orchestration action, drift warnings, and targeted resume questions when needed.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -1287,7 +1294,7 @@ TOOLS: dict[str, dict[str, Any]] = {
         "handler": tool_resume_task,
     },
     "relaykit_resume_handoff": {
-        "description": "Return a ready-to-run handoff bundle for the remaining or requested task parts after an interruption.",
+        "description": "Return a ready-to-run handoff bundle for the remaining or requested task parts after an interruption. Use this after `resume_task` when a host needs the actual remaining work packet.",
         "inputSchema": {
             "type": "object",
             "properties": {
