@@ -1,6 +1,6 @@
 ---
 name: relaykit-converger
-description: Use when several candidate outputs, reviews, or RelayKit lanes need to be compared, merged, or resolved into one final direction without losing the decision rationale.
+description: Use only after RelayKit has already assigned a convergence lane. This skill compares, merges, or resolves several candidate outputs into one final direction without losing the decision rationale.
 license: MIT
 compatibility:
   hosts:
@@ -19,6 +19,8 @@ metadata:
 # RelayKit Converger
 
 Use this skill when the lane owns synthesis across several competing or overlapping outputs.
+
+If the user is asking to split work across tools, start with `relaykit` first. Do not load this role skill as the entrypoint for multi-tool routing.
 
 Common fits:
 

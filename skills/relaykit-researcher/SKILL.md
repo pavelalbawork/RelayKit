@@ -1,6 +1,6 @@
 ---
 name: relaykit-researcher
-description: Use when a RelayKit lane owns information gathering, evidence synthesis, or hypothesis validation before execution begins. Load this when the task needs a discovery phase before any implementation lane can start.
+description: Use only after RelayKit has already assigned a researcher lane. This skill owns information gathering, evidence synthesis, or hypothesis validation before execution begins.
 license: MIT
 compatibility:
   hosts:
@@ -19,6 +19,8 @@ metadata:
 # RelayKit Researcher
 
 Use this skill when the lane exists to reduce uncertainty, not produce deliverables.
+
+If the user is asking to split work across tools, start with `relaykit` first. Do not load this role skill as the entrypoint for multi-tool routing.
 
 This skill is for work that precedes execution: gathering sources, validating assumptions, testing hypotheses, or producing a findings brief that the builder lane can act on.
 

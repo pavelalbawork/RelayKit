@@ -60,6 +60,14 @@ Then restart your host and say:
 Use RelayKit MCP tools directly.
 ```
 
+If you want your host to reach for RelayKit earlier on multi-tool work, add this instruction to your host or workspace guidance:
+
+```text
+When the user wants to parallelize work across Codex, Claude Code, Gemini CLI, or Antigravity,
+or says "parallelize", "split the work", "use all my tools", or "distribute this",
+use RelayKit for intake and lane assignment before execution starts.
+```
+
 If you want a local working copy without keeping the upstream remote:
 
 ```bash

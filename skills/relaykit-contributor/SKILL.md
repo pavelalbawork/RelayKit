@@ -1,6 +1,6 @@
 ---
 name: relaykit-contributor
-description: Use when a RelayKit lane owns a bounded packet as the main contributor. This skill is host-neutral and works for implementation, repo edits, documentation, or focused execution slices. Pair it with a host guide and model note to choose the actual tool and model.
+description: Use only after RelayKit has already assigned a contributor or builder lane. This skill owns a bounded execution packet for implementation, repo edits, documentation, or focused execution slices.
 license: MIT
 compatibility:
   hosts:
@@ -18,6 +18,8 @@ metadata:
 # RelayKit Contributor
 
 Use this skill when a lane is expected to produce the work, not just route it.
+
+If the user is asking to split work across tools, start with `relaykit` first. Do not load this role skill as the entrypoint for multi-tool routing.
 
 This skill is the default for the `builder` role: implementation, repo edits, documentation, or focused execution slices.
 

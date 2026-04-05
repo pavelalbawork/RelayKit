@@ -1,6 +1,6 @@
 ---
 name: relaykit-reviewer
-description: Use when a RelayKit lane has explicit gate authority — merge approval, deploy sign-off, or phase advancement. This skill is distinct from the critic skill, which is advisory. Load this only when the lane is authorized to block or pass work.
+description: Use only after RelayKit has already assigned a reviewer lane with gate authority. This skill handles merge approval, deploy sign-off, or phase advancement.
 license: MIT
 compatibility:
   hosts:
@@ -19,6 +19,8 @@ metadata:
 # RelayKit Reviewer
 
 Use this skill when the lane has gate authority, not just an opinion.
+
+If the user is asking to split work across tools, start with `relaykit` first. Do not load this role skill as the entrypoint for multi-tool routing.
 
 The distinction matters: a critic challenges and advises; a reviewer blocks or passes. Do not load this skill unless the task packet or lane assignment explicitly grants gate authority. Loading it incorrectly gives a lane more power than the operator intended.
 

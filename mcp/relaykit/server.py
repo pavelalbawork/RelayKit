@@ -788,7 +788,7 @@ TOOLS: dict[str, dict[str, Any]] = {
         "handler": tool_doctor,
     },
     "relaykit_host_status": {
-        "description": "Report whether one or more hosts are ready for RelayKit and return recommended onboarding actions before any task flow starts.",
+        "description": "Use when you want to enable or verify RelayKit on one or more hosts before multi-tool work starts. Reports host readiness and recommended onboarding actions.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -800,7 +800,7 @@ TOOLS: dict[str, dict[str, Any]] = {
         "handler": tool_host_status,
     },
     "relaykit_bootstrap_host": {
-        "description": "Install RelayKit skills and auto-configure wiring for one or more supported hosts. Prefer this over manual config edits when MCP is available.",
+        "description": "Use when you want RelayKit available in one or more hosts for multi-tool work. Installs RelayKit skills and auto-configures wiring instead of relying on manual config edits.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -832,7 +832,7 @@ TOOLS: dict[str, dict[str, Any]] = {
         "handler": tool_guided_setup,
     },
     "relaykit_setup": {
-        "description": "Run the first-use RelayKit setup flow: wire the host, optionally run the local smoke test, and return concise next steps for entering the MCP path.",
+        "description": "Use when the user wants to split or coordinate work across Codex, Claude Code, Gemini CLI, or Antigravity and the host may not be wired yet. Runs first-use setup, optional smoke, and returns the next MCP steps.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -1051,7 +1051,7 @@ TOOLS: dict[str, dict[str, Any]] = {
         "handler": tool_init_persona,
     },
     "relaykit_start_task": {
-        "description": "Start a RelayKit intake flow for a task and return the next clarification question or recommendation. Prefer this MCP tool over shelling out to the relaykit CLI when available.",
+        "description": "Use when the user wants to parallelize work, split work across tools, use all their tools, or assign different lanes before execution starts. Starts RelayKit intake from free text and returns the next clarification question or recommendation.",
         "inputSchema": {
             "type": "object",
             "properties": {

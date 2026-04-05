@@ -1,6 +1,6 @@
 ---
 name: relaykit-critic
-description: Use when a RelayKit lane should challenge assumptions, designs, plans, or outputs without automatically taking ownership of implementation. Pair this with a host guide and model note when you want a structured second opinion or pre-merge critique.
+description: Use only after RelayKit has already assigned a critic lane. This skill challenges assumptions, designs, plans, or outputs without taking ownership of implementation.
 license: MIT
 compatibility:
   hosts:
@@ -19,6 +19,8 @@ metadata:
 # RelayKit Critic
 
 Use this skill when the lane exists to improve judgment quality:
+
+If the user is asking to split work across tools, start with `relaykit` first. Do not load this role skill as the entrypoint for multi-tool routing.
 
 - challenge architecture or execution assumptions
 - identify hidden risks or weak evidence

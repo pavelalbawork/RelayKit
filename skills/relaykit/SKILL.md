@@ -1,6 +1,6 @@
 ---
 name: relaykit
-description: Use when you want RelayKit to augment Codex, Claude Code, Antigravity, or Gemini CLI for multi-tool, human-in-the-loop parallel execution, starting from task intake and ending in the right lane assignments.
+description: Use when the user wants to parallelize work, split work across tools, use all their tools, distribute work across Codex, Claude Code, Gemini CLI, or Antigravity, or assign different lanes before execution starts.
 license: MIT
 compatibility:
   hosts:
@@ -23,6 +23,7 @@ This skill does not replace the role skills. It chooses and loads them cleanly s
 
 ## When To Use It
 
+- the user says things like "parallelize this", "split the work", "use all my tools", "distribute this", or "have one tool build while another reviews"
 - the workspace has not been onboarded into RelayKit yet
 - the host should use the RelayKit intake flow before committing to lane assignments
 - the task needs a portable setup recommendation instead of a tool-bound role assumption

@@ -1,6 +1,6 @@
 ---
 name: relaykit-tester
-description: Use when a RelayKit lane owns verification, coverage, or evidence generation for completed work. Load this when the task needs a dedicated lane to validate that builder output meets acceptance criteria before it advances.
+description: Use only after RelayKit has already assigned a tester lane. This skill owns verification, coverage, or evidence generation for completed work.
 license: MIT
 compatibility:
   hosts:
@@ -19,6 +19,8 @@ metadata:
 # RelayKit Tester
 
 Use this skill when the lane exists to verify work, not produce it.
+
+If the user is asking to split work across tools, start with `relaykit` first. Do not load this role skill as the entrypoint for multi-tool routing.
 
 This skill is for testing that delivered output actually satisfies acceptance criteria: writing tests, running them, checking edge cases, and producing a concrete pass/fail record. The tester lane does not own the implementation — it owns the evidence.
 
