@@ -211,7 +211,6 @@ See the [end-to-end walkthrough](examples/basic-workspace/WALKTHROUGH.md) for a 
 ## Documentation
 
 - [Docs Home](docs/index.md) — narrative and reading order
-- [RelayKit vs RelayPack](docs/comparison.md) — which repo to use and why
 - [Core Concepts](docs/concepts.md) — tasks, roles, lanes, hosts, checkpoints
 - [Commands](docs/commands.md) — full CLI reference
 - [Configuration](docs/configuration.md) — registry, profiles, presets
