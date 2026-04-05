@@ -44,6 +44,13 @@ Do not use this skill as an excuse to own all implementation. An orchestrator sh
 4. Push ambiguous work toward a bounded packet before handing it off.
 5. At each checkpoint, choose one of: continue, hand off, escalate, review, or converge.
 
+Operational timing rules:
+
+- confirm the RelayKit task before real work starts
+- checkpoint after the first concrete artifact, blocker, or verified finding
+- advance the task immediately when RelayKit reports `blocked`, `needs_reroute`, or `ready_for_next_phase`
+- if repo work is happening while RelayKit still says `recommended`, stop and bring the orchestration state forward
+
 ## Output Contract
 
 Always leave behind:

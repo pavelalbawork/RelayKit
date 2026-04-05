@@ -314,6 +314,8 @@ The compact consolidation packet keeps the full per-part reports in the structur
 
 RelayKit also tracks a phase mode for each task (`research-phase`, `review-phase`, or `implementation-phase`) and carries a per-part output contract in handoff packets. If a research-first lane starts producing implementation output or unsupported research claims, `checkpoint-task`, `checkpoint-phase`, and `render-consolidation-packet` now surface phase warnings instead of letting the drift stay invisible.
 
+RelayKit also watches for repo/state drift. If files are changing while a task is still only recommended, or a phase is active but nobody has checkpointed a concrete result yet, `show-task`, `resume-task`, and `inspect-task` now surface drift warnings and orchestration guidance so the operator knows when to confirm, checkpoint, or advance the task state.
+
 ## Workspace Setup
 
 Save persistent defaults so RelayKit knows your available tools and models:

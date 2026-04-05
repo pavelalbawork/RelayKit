@@ -114,6 +114,13 @@ relaykit reflect-task --workspace-root . --task-id <id> --split-worth-it yes --t
 
 `checkpoint-task`, `checkpoint-phase`, and `render-consolidation-packet` can now surface `phase_warnings` when outputs drift across phase boundaries, such as production code appearing in a research-first task or research claims being checkpointed without explicit sources.
 
+RelayKit now also surfaces `drift_warnings` and `orchestration_guidance` in `show-task`, `resume-task`, and `inspect-task` when repo activity is moving faster than the orchestration state. If files are changing but the task is still only recommended, or an active phase has real work but no checkpoint yet, RelayKit will tell the operator to confirm or advance the task instead of silently lagging behind.
+
+Operational rule:
+- run `confirm-task` before real work starts
+- run `checkpoint-task` or `checkpoint-phase` after the first concrete artifact, blocker, or verified finding
+- run `advance-task` as soon as RelayKit says `blocked`, `needs_reroute`, or `ready_for_next_phase`
+
 **Interrupted lean task:**
 ```bash
 relaykit resume-task --workspace-root . --task-id <id>

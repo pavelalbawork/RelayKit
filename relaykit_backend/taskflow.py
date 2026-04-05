@@ -302,6 +302,75 @@ def phase_contract_warnings(
     return warnings
 
 
+def _recent_repo_activity(state: dict[str, Any], *, window_minutes: int = 120) -> list[str]:
+    repo_root_value = state.get("project_root") or state.get("workspace_root")
+    if not repo_root_value:
+        return []
+    repo_root = Path(repo_root_value)
+    if not repo_root.exists():
+        return []
+    cutoff = datetime.now(timezone.utc).timestamp() - (window_minutes * 60)
+    recent: list[tuple[float, str]] = []
+    for path in repo_root.rglob("*"):
+        if not path.is_file():
+            continue
+        if any(part in {".relaykit", ".git", "__pycache__"} for part in path.parts):
+            continue
+        if path.name.startswith("."):
+            continue
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        if stat.st_mtime >= cutoff:
+            recent.append((stat.st_mtime, str(path)))
+    recent.sort(reverse=True)
+    return [item[1] for item in recent[:10]]
+
+
+def state_drift_warnings(state: dict[str, Any]) -> list[str]:
+    warnings: list[str] = []
+    recent_files = _recent_repo_activity(state)
+    if state.get("status") == "recommended" and recent_files:
+        warnings.append(
+            "Repo activity drift: files changed after recommendation, but the task was never confirmed. Either confirm the phase or start a fresh task so RelayKit matches the real work."
+        )
+    current = current_phase(state)
+    phase_mode = (current or {}).get("phase_mode") or (state.get("confirmed_plan") or state.get("recommendation") or {}).get("phase_mode")
+    if phase_mode == "research-phase":
+        implementation_files = [
+            path for path in recent_files
+            if path.endswith((".swift", ".ts", ".tsx", ".js", ".py"))
+        ]
+        if implementation_files:
+            warnings.append(
+                "Research-phase drift: implementation files are changing while the active RelayKit phase is still research-first."
+            )
+    if state.get("status") == "active" and current is not None:
+        checkpointed = _phase_checkpointed_parts(current)
+        if not checkpointed and recent_files:
+            warnings.append(
+                "Advance overdue: repo activity is happening, but no checkpoint has been recorded for the active phase yet."
+            )
+    return warnings
+
+
+def orchestration_guidance(state: dict[str, Any]) -> list[str]:
+    guidance: list[str] = []
+    status = state.get("status")
+    current = current_phase(state)
+    recent_files = _recent_repo_activity(state)
+    if status == "recommended":
+        guidance.append("If work is actually starting, run `confirm-task` first so RelayKit owns the phase instead of trailing the repo.")
+    if status in {"active", "launched"} and recent_files and current is not None and not _phase_checkpointed_parts(current):
+        guidance.append("Checkpoint after the first concrete artifact, blocker, or research finding instead of letting work continue off-ledger.")
+    if status in {"blocked", "needs_reroute", "ready_for_next_phase"}:
+        guidance.append("Use `advance-task` now. The orchestration layer is waiting for an explicit phase decision.")
+    if current is not None and current.get("phase_mode") == "research-phase":
+        guidance.append("Do not start implementation output in a research-phase lane unless you explicitly reroute the task with `advance-task` or a change request.")
+    return dedupe(guidance)
+
+
 def slugify(text: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
     return slug[:40] or "task"
@@ -1795,6 +1864,8 @@ def build_summary_markdown(state: dict[str, Any]) -> str:
         f"- Task: {state['task']['original']}",
     ]
     if recommendation:
+        drift = state_drift_warnings(state)
+        guidance = orchestration_guidance(state)
         lines.extend(
             [
                 f"- Archetype: `{recommendation['archetype']['value']}`",
@@ -1829,6 +1900,12 @@ def build_summary_markdown(state: dict[str, Any]) -> str:
                 f"- Resume instructions: {state.get('continuation', {}).get('resume_instructions', 'Run `relaykit.py resume-task --task-id <id>` to continue.')}",
             ]
         )
+        if drift:
+            lines.extend(["", "## Drift Warnings", ""])
+            lines.extend([f"- {item}" for item in drift])
+        if guidance:
+            lines.extend(["", "## Orchestration Guidance", ""])
+            lines.extend([f"- {item}" for item in guidance])
     return "\n".join(lines) + "\n"
 
 
@@ -3066,6 +3143,12 @@ def resume_task(
         "current_phase_id": state.get("current_phase_id"),
         "resume_questions": [],
     }
+    drift = state_drift_warnings(state)
+    guidance = orchestration_guidance(state)
+    if drift:
+        payload["drift_warnings"] = drift
+    if guidance:
+        payload["orchestration_guidance"] = guidance
     if verbosity == "verbose":
         payload["summary"] = state.get("continuation", {})
         payload["recommendation"] = state.get("confirmed_plan") or state.get("recommendation")
@@ -3381,6 +3464,8 @@ def inspect_task(
         "recommendation": state.get("recommendation"),
         "current_phase": current_phase(state),
         "latest_checkpoint": latest_checkpoint_event(state),
+        "drift_warnings": state_drift_warnings(state),
+        "orchestration_guidance": orchestration_guidance(state),
     }
 
 
@@ -3485,6 +3570,8 @@ def show_task(
         "current_phase": current_phase(state),
         "latest_checkpoint": latest_checkpoint_event(state),
         "timeline": _build_timeline(state),
+        "drift_warnings": state_drift_warnings(state),
+        "orchestration_guidance": orchestration_guidance(state),
     }
     phase = current_phase(state)
     if phase is not None:
