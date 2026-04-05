@@ -35,6 +35,7 @@ TOOL_FIT_VALUES = {"good", "bad", "mixed", "unknown"}
 HANDOFF_VERBOSITIES = {"ultra-compact", "compact", "verbose"}
 RESUME_VERBOSITIES = {"compact", "verbose"}
 RESULT_VERBOSITIES = {"compact", "verbose"}
+PHASE_MODES = {"review-phase", "research-phase", "implementation-phase"}
 TOOL_COST = {
     "gpt-5.4": "high",
     "gpt-5.4-mini": "low",
@@ -159,6 +160,146 @@ def _keyword_matches(text: str, keywords: set[str]) -> list[str]:
 
 def _matches_any_pattern(text: str, patterns: tuple[str, ...]) -> bool:
     return any(re.search(pattern, text) for pattern in patterns)
+
+
+def phase_mode_for_classification(classification: dict[str, Any]) -> str:
+    if classification["task_type"] == "review-only":
+        return "review-phase"
+    if classification.get("pre_implementation_research") or (
+        classification["flags"]["research"] and not classification["flags"]["implementation"]
+    ):
+        return "research-phase"
+    return "implementation-phase"
+
+
+def phase_mode_summary(phase_mode: str) -> str:
+    if phase_mode == "research-phase":
+        return "Research and decisions first. Do not treat implementation as in scope until evidence and synthesis are complete."
+    if phase_mode == "review-phase":
+        return "Advisory or gate review only. Do not take implementation ownership unless the task is explicitly rerouted."
+    return "Implementation is in scope. Research and review may support execution, but the phase is allowed to produce code."
+
+
+def output_contract_for_part(part: dict[str, Any], *, phase_mode: str) -> dict[str, Any]:
+    role = part.get("role")
+    allowed_outputs: list[str]
+    disallowed_outputs: list[str] = []
+    evidence_required = False
+    if phase_mode == "research-phase":
+        if role == "researcher":
+            allowed_outputs = [
+                "verified findings",
+                "source-backed endpoint notes",
+                "open questions",
+                "risks and caveats",
+            ]
+            disallowed_outputs = [
+                "production code",
+                "implementation file trees presented as settled",
+                "unverified API claims",
+            ]
+            evidence_required = True
+        elif role == "converger":
+            allowed_outputs = [
+                "decision synthesis",
+                "implementation-ready brief grounded in prior lane outputs",
+                "tradeoff summary",
+            ]
+            disallowed_outputs = [
+                "new unsupported research claims",
+                "production code",
+            ]
+        else:
+            allowed_outputs = [
+                "design exploration",
+                "wireframes",
+                "interaction patterns",
+                "architecture options",
+            ]
+            disallowed_outputs = [
+                "production code",
+                "implementation plan presented as already executed",
+            ]
+    elif phase_mode == "review-phase":
+        allowed_outputs = ["review findings", "approval or rejection rationale", "risks", "verification notes"]
+        disallowed_outputs = ["production code"]
+    else:
+        allowed_outputs = ["code changes", "implementation notes", "verification evidence"]
+    return {
+        "phase_mode": phase_mode,
+        "allowed_outputs": allowed_outputs,
+        "disallowed_outputs": disallowed_outputs,
+        "evidence_required": evidence_required,
+    }
+
+
+def _evidence_text(notes: str, artifacts: dict[str, Any] | None, report_markdown: str | None) -> str:
+    chunks = [notes or "", report_markdown or ""]
+    if artifacts:
+        for key in ("findings", "decisions"):
+            value = artifacts.get(key)
+            if isinstance(value, str):
+                chunks.append(value)
+        for key in ("files_discovered", "blockers"):
+            value = artifacts.get(key)
+            if isinstance(value, list):
+                chunks.extend(str(item) for item in value)
+    return "\n".join(chunk for chunk in chunks if chunk).lower()
+
+
+def phase_contract_warnings(
+    state: dict[str, Any],
+    part: dict[str, Any] | None,
+    *,
+    notes: str,
+    artifacts: dict[str, Any] | None,
+    report_markdown: str | None,
+) -> list[str]:
+    recommendation = state.get("confirmed_plan") or state.get("recommendation") or {}
+    phase_mode = recommendation.get("phase_mode") or phase_mode_for_classification(state.get("classification") or {})
+    if phase_mode not in PHASE_MODES:
+        return []
+    warnings: list[str] = []
+    role = (part or {}).get("assignment", {}).get("role") or (part or {}).get("role")
+    text = _evidence_text(notes, artifacts, report_markdown)
+    files = [str(item).lower() for item in (artifacts or {}).get("files_discovered", []) if item]
+    implementation_markers = (
+        ".swift",
+        ".ts",
+        ".tsx",
+        ".js",
+        ".py",
+        "struct ",
+        "class ",
+        "protocol ",
+        "enum ",
+        "func ",
+        "implemented",
+        "implementation complete",
+        "wrote code",
+        "created file",
+    )
+    if phase_mode == "research-phase":
+        if any(marker in text for marker in implementation_markers) or any(
+            item.endswith((".swift", ".ts", ".tsx", ".js", ".py")) for item in files
+        ):
+            warnings.append(
+                "Research-phase contamination: this checkpoint looks like implementation output. Keep code generation out of a research-first phase or reroute the task."
+            )
+        if role == "researcher":
+            has_source = bool(re.search(r"https?://", text))
+            if not has_source:
+                warnings.append(
+                    "Research evidence is weak: the research lane did not include an explicit source URL or citation-like reference."
+                )
+    if phase_mode == "review-phase" and (
+        any(marker in text for marker in implementation_markers)
+        or any(item.endswith((".swift", ".ts", ".tsx", ".js", ".py")) for item in files)
+    ):
+        warnings.append(
+            "Review-phase contamination: review lanes should not produce implementation output unless the task is explicitly rerouted."
+        )
+    return warnings
 
 
 def slugify(text: str) -> str:
@@ -1311,6 +1452,7 @@ def setup_recommendation(
     project_profile: dict[str, Any] | None,
 ) -> dict[str, Any]:
     classification = classify_task(state, registry)
+    phase_mode = phase_mode_for_classification(classification)
     defaults = state["layers"]["defaults"]
     manual_setup = state.get("manual_overrides", {})
     force_research = bool(manual_setup.get("force_research"))
@@ -1458,6 +1600,7 @@ def setup_recommendation(
                 "reason": part_reason(part, classification, assignment["host"]),
                 "prompt_stack": prompt_stack,
                 "stack_components": stack_components,
+                "output_contract": output_contract_for_part(part, phase_mode=phase_mode),
             }
         )
         selected_hosts.append(assignment["host"])
@@ -1526,6 +1669,8 @@ def setup_recommendation(
 
     recommendation = {
         "task_summary": task_summary_text(state),
+        "phase_mode": phase_mode,
+        "phase_summary": phase_mode_summary(phase_mode),
         "archetype": {
             "value": classification["archetype"],
             "confidence": classification["confidence"],
@@ -1653,6 +1798,7 @@ def build_summary_markdown(state: dict[str, Any]) -> str:
         lines.extend(
             [
                 f"- Archetype: `{recommendation['archetype']['value']}`",
+                f"- Phase mode: `{recommendation.get('phase_mode', 'implementation-phase')}`",
                 f"- Setup: `{recommendation['setup']['coordination']} + {recommendation['setup']['continuity']}`",
                 f"- Confidence: `{recommendation['confidence']['level']}`",
                 f"- Coordination overhead: `{recommendation['overhead']['coordination']}`",
@@ -1670,6 +1816,9 @@ def build_summary_markdown(state: dict[str, Any]) -> str:
                 line += f" / persona `{assignment['persona']}`"
             lines.append(line)
             lines.append(f"  Objective: {part['objective']}")
+            contract = part.get("output_contract") or {}
+            if contract.get("allowed_outputs"):
+                lines.append(f"  Allowed outputs: {', '.join(contract['allowed_outputs'])}")
         lines.extend(
             [
                 "",
@@ -2365,6 +2514,8 @@ def confirm_task(
         "created_at": now_iso(),
         "label": "initial execution",
         "status": "active",
+        "phase_mode": recommendation.get("phase_mode", "implementation-phase"),
+        "phase_summary": recommendation.get("phase_summary", ""),
         "setup": recommendation["setup"],
         "task_parts": recommendation["task_parts"],
         "change_reason": "none",
@@ -2519,6 +2670,9 @@ def checkpoint_task(
         "checkpoint_policy": matched_part.get("checkpoint_policy", "gate") if matched_part else "gate",
         "report_markdown_captured": bool(report_markdown),
     }
+    latest_event = phase["history"][-1] if phase.get("history") else {}
+    if latest_event.get("phase_warnings"):
+        payload["phase_warnings"] = latest_event["phase_warnings"]
     optional_parallel_follow_up = state["continuation"]["optional_parallel_follow_up"]
     if optional_parallel_follow_up:
         payload["optional_parallel_follow_up"] = optional_parallel_follow_up
@@ -2586,6 +2740,16 @@ def _record_checkpoint_event(
             if diff:
                 event.setdefault("artifacts", {})["git_diff"] = diff
 
+    warnings = phase_contract_warnings(
+        state,
+        matched_part,
+        notes=notes,
+        artifacts=event.get("artifacts"),
+        report_markdown=report_markdown,
+    )
+    if warnings:
+        event["phase_warnings"] = warnings
+
     if notes.strip() or event.get("artifacts") or report_markdown:
         _append_scratchpad_entry(
             state,
@@ -2641,6 +2805,7 @@ def checkpoint_phase(
     report_summaries: list[dict[str, Any]] = []
     final_outcomes: list[str] = []
     aggregate_notes: list[str] = []
+    aggregate_warnings: list[str] = []
     for report in reports:
         part_id = report.get("part_id")
         if not part_id:
@@ -2681,6 +2846,9 @@ def checkpoint_phase(
             report_summary["notes"] = notes
             report_summary["artifact_keys"] = sorted((artifacts or {}).keys())
             report_summary["recorded_at"] = event.get("at")
+        if event.get("phase_warnings"):
+            report_summary["phase_warnings"] = event["phase_warnings"]
+            aggregate_warnings.extend(event["phase_warnings"])
         report_summaries.append(report_summary)
 
     aggregate_outcome = _aggregate_phase_outcome(final_outcomes)
@@ -2724,6 +2892,8 @@ def checkpoint_phase(
         "resume_instructions": state["continuation"]["resume_instructions"],
         "apply_command": f"relaykit.py advance-task --task-id {task_id}",
     }
+    if aggregate_warnings:
+        payload["phase_warnings"] = dedupe(aggregate_warnings)
     optional_parallel_follow_up = state["continuation"]["optional_parallel_follow_up"]
     if optional_parallel_follow_up:
         payload["optional_parallel_follow_up"] = optional_parallel_follow_up
@@ -2798,6 +2968,8 @@ def _phase_summary(phase: dict[str, Any]) -> dict[str, Any]:
         "phase_id": phase.get("phase_id"),
         "label": phase.get("label"),
         "status": phase.get("status"),
+        "phase_mode": phase.get("phase_mode"),
+        "phase_summary": phase.get("phase_summary"),
         "setup": deepcopy(phase.get("setup", {})),
         "change_reason": phase.get("change_reason"),
         "entry_action": phase.get("entry_action"),
@@ -3352,6 +3524,7 @@ def build_handoff_card(
             )
         )
     execution_context = state.get("execution_context")
+    output_contract = part.get("output_contract") or {}
     if verbosity == "ultra-compact":
         payload = {
             "task_id": state["task_id"],
@@ -3373,6 +3546,8 @@ def build_handoff_card(
             payload["workspace_root"] = state["workspace_root"]
         if state["task"].get("verification"):
             payload["verification_target"] = state["task"]["verification"]
+        if output_contract.get("allowed_outputs"):
+            payload["allowed_outputs"] = output_contract["allowed_outputs"]
         if scratchpad:
             payload["scratchpad_path"] = _compact_display_path(scratchpad, state)
         ultra_execution_context = _ultra_compact_execution_context(execution_context)
@@ -3396,6 +3571,9 @@ def build_handoff_card(
             "definition_of_done": state["task"].get("definition_of_done") or "Not set.",
             "verification_target": state["task"].get("verification") or "Not set.",
             "remaining_uncertainty": state["task"].get("remaining_uncertainty") or "None noted.",
+            "phase_mode": (state.get("confirmed_plan") or state.get("recommendation") or {}).get("phase_mode"),
+            "phase_summary": (state.get("confirmed_plan") or state.get("recommendation") or {}).get("phase_summary"),
+            "output_contract": deepcopy(output_contract),
             "stop_condition": stop_condition,
             "scratchpad_path": scratchpad,
             "stack_components": deepcopy(part.get("stack_components", [])),
@@ -3414,6 +3592,7 @@ def build_handoff_card(
         "model": assignment["model"],
         "goal": part["objective"],
         "task_summary": task_summary_text(state),
+        "phase_mode": (state.get("confirmed_plan") or state.get("recommendation") or {}).get("phase_mode"),
         "stop_condition": stop_condition,
         "stack_ids": [
             {"kind": item["kind"], "id": item["id"]}
@@ -3432,6 +3611,8 @@ def build_handoff_card(
         payload["definition_of_done"] = state["task"]["definition_of_done"]
     if state["task"].get("remaining_uncertainty"):
         payload["remaining_uncertainty"] = state["task"]["remaining_uncertainty"]
+    if output_contract:
+        payload["output_contract"] = deepcopy(output_contract)
     if scratchpad:
         payload["scratchpad_path"] = _compact_display_path(scratchpad, state)
     compact_execution_context = _compact_execution_context(execution_context)
@@ -3631,6 +3812,9 @@ def render_task_part_markdown(
             part["objective"],
             "",
         ]
+        phase_mode = (state.get("confirmed_plan") or state.get("recommendation") or {}).get("phase_mode")
+        if phase_mode:
+            lines.extend(["## Phase Mode", "", f"`{phase_mode}`", ""])
         if state["task"].get("verification"):
             lines.extend(["## Verify", "", state["task"]["verification"], ""])
     elif verbosity == "verbose":
@@ -3679,6 +3863,20 @@ def render_task_part_markdown(
             "",
         ]
         lines.extend(_compact_task_context_lines(state))
+        lines.append("")
+    phase_mode = (state.get("confirmed_plan") or state.get("recommendation") or {}).get("phase_mode")
+    phase_summary = (state.get("confirmed_plan") or state.get("recommendation") or {}).get("phase_summary")
+    output_contract = part.get("output_contract") or {}
+    if phase_mode and verbosity != "ultra-compact":
+        lines.extend(["## Phase Contract", "", f"- Mode: `{phase_mode}`"])
+        if phase_summary:
+            lines.append(f"- Summary: {phase_summary}")
+        if output_contract.get("allowed_outputs"):
+            lines.append(f"- Allowed outputs: {', '.join(output_contract['allowed_outputs'])}")
+        if output_contract.get("disallowed_outputs"):
+            lines.append(f"- Disallowed outputs: {', '.join(output_contract['disallowed_outputs'])}")
+        if output_contract.get("evidence_required"):
+            lines.append("- Evidence required: include explicit source links or citation-like references.")
         lines.append("")
     if verbosity != "ultra-compact":
         prior_lines = render_prior_context(state, part["part_id"], verbosity=verbosity)
@@ -3874,6 +4072,7 @@ def render_consolidation_packet(
     if verbosity not in HANDOFF_VERBOSITIES:
         fail(f"invalid consolidation verbosity `{verbosity}`")
     state = load_task_state(task_id, root, registry)
+    recommendation = state.get("confirmed_plan") or state.get("recommendation") or {}
     phase = current_phase(state) if phase_id is None else next(
         (item for item in state.get("phases", []) if item.get("phase_id") == phase_id),
         None,
@@ -3927,6 +4126,7 @@ def render_consolidation_packet(
         f"- Task id: `{task_id}`",
         f"- Phase: `{phase['phase_id']}`",
         f"- Task status: `{state.get('status')}`",
+        f"- Phase mode: `{phase.get('phase_mode') or (state.get('confirmed_plan') or state.get('recommendation') or {}).get('phase_mode', 'implementation-phase')}`",
         f"- Setup: `{phase.get('setup', {}).get('coordination', 'unknown')} + {phase.get('setup', {}).get('continuity', 'unknown')}`",
         "",
         "## Phase Summary",
@@ -3935,6 +4135,18 @@ def render_consolidation_packet(
         f"- Latest checkpointed parts: {', '.join(f'`{item['part_id']}`' for item in reports) if reports else 'None yet.'}",
         "",
     ]
+    phase_warnings = dedupe(
+        [
+            warning
+            for report in reports
+            for warning in (latest_by_part.get(report["part_id"], {}) or {}).get("phase_warnings", [])
+        ]
+    )
+    if phase.get("phase_summary"):
+        lines.append(f"- Phase contract: {phase['phase_summary']}")
+        lines.append("")
+    if phase_warnings:
+        lines.extend(["## Phase Warnings", "", *[f"- {warning}" for warning in phase_warnings], ""])
     if scratchpad_excerpt:
         lines.extend(["## Scratchpad Excerpt", "", scratchpad_excerpt, ""])
     lines.extend(["## Latest Per-Part Reports", ""])
@@ -3962,6 +4174,9 @@ def render_consolidation_packet(
                     ]
                 )
         artifacts = report.get("artifacts") or {}
+        warnings = latest_by_part.get(report["part_id"], {}).get("phase_warnings") or []
+        if warnings:
+            lines.extend(["#### Warnings", "", *[f"- {warning}" for warning in warnings], ""])
         if verbosity == "verbose" and artifacts:
             lines.extend(["#### Artifacts", "", "```json", json.dumps(artifacts, indent=2), "```", ""])
     lines.extend(
@@ -3979,10 +4194,12 @@ def render_consolidation_packet(
         "verbosity": verbosity,
         "phase_summary": {
             "status": state.get("status"),
+            "phase_mode": phase.get("phase_mode") or recommendation.get("phase_mode"),
             "setup": deepcopy(phase.get("setup", {})),
             "task_summary": task_summary_text(state),
         },
         "reports": reports,
+        "phase_warnings": phase_warnings,
         "scratchpad_path": (
             _compact_display_path(str(sp), state)
             if sp.exists() and verbosity != "verbose"

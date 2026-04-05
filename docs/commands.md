@@ -92,6 +92,8 @@ relaykit reflect-task --workspace-root . --task-id <id> --split-worth-it yes --t
 
 `confirm-task` returns a `launch_bundle` automatically on lean coordinated runs, so you usually do not need separate `render-task-part` calls unless you want a verbose packet or need to re-render later. Compact launch markdown omits empty task-context fields and keeps the machine-readable handoff card in the structured payload instead of repeating it inline. The default lean launch bundle now uses `ultra-compact` handoffs to minimize packet size.
 
+Recommendations and handoff packets now include a phase mode (`research-phase`, `review-phase`, or `implementation-phase`) plus a per-part output contract. Use that contract to keep pre-implementation work out of code lanes until the task is explicitly rerouted.
+
 If `confirm-task` says the task should stay manual, RelayKit is telling you the protocol overhead is not worth it. Force the protocol only when you explicitly need handoffs or persistent state:
 
 ```bash
@@ -109,6 +111,8 @@ relaykit advance-task --workspace-root . --task-id <id>
 relaykit resume-task --workspace-root . --task-id <id>
 relaykit reflect-task --workspace-root . --task-id <id> --split-worth-it yes --tool-fit good
 ```
+
+`checkpoint-task`, `checkpoint-phase`, and `render-consolidation-packet` can now surface `phase_warnings` when outputs drift across phase boundaries, such as production code appearing in a research-first task or research claims being checkpointed without explicit sources.
 
 **Interrupted lean task:**
 ```bash

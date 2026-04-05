@@ -12,6 +12,13 @@ Tasks have two dimensions:
 
 All four combinations are valid. RelayKit picks the smallest setup likely to work well while preserving operator control.
 
+Tasks also carry a **phase mode**:
+- **research-phase** — evidence, design exploration, and decision-making before implementation
+- **review-phase** — critique or gate review without implementation ownership
+- **implementation-phase** — execution is allowed to produce code and verification artifacts
+
+Phase mode shapes the lane contracts and lets RelayKit warn when outputs drift into the wrong phase.
+
 ## Roles
 
 Roles describe what a lane does, not which tool runs it:
@@ -55,11 +62,20 @@ In full mode, work is checkpoint-driven. Each checkpoint produces:
 
 Checkpoint outcomes: `on_track`, `blocked`, `needs_reroute`, `ready_for_next_phase`.
 
+RelayKit can also attach **phase warnings** to checkpoints when outputs violate the current phase contract. Example: a research-phase lane producing `.swift` files or unsupported API claims without explicit sources.
+
 ## Task Parts
 
 When RelayKit recommends a coordinated setup, the task is split into parts. Each part gets its own lane assignment, objective, and optional persona so multiple harnesses can run in parallel without losing role clarity.
 
 The default second part, when coordination is justified, is critique.
+
+Each task part also carries an **output contract**:
+- allowed outputs
+- disallowed outputs
+- whether source-backed evidence is required
+
+RelayKit includes that contract in the handoff packet so receiving hosts know whether they are supposed to research, design, review, or implement.
 
 ## Presets
 

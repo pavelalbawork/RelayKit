@@ -312,6 +312,8 @@ relaykit render-consolidation-packet --workspace-root . --task-id <id>
 
 The compact consolidation packet keeps the full per-part reports in the structured payload while summarizing them in the markdown handoff by default. Use `--verbosity verbose` when you want the full inline report text. The lean path is optimized for low-overhead handoffs; use `render-task-part --verbosity verbose` when a receiving host needs the full prompt stack and richer context.
 
+RelayKit also tracks a phase mode for each task (`research-phase`, `review-phase`, or `implementation-phase`) and carries a per-part output contract in handoff packets. If a research-first lane starts producing implementation output or unsupported research claims, `checkpoint-task`, `checkpoint-phase`, and `render-consolidation-packet` now surface phase warnings instead of letting the drift stay invisible.
+
 ## Workspace Setup
 
 Save persistent defaults so RelayKit knows your available tools and models:
