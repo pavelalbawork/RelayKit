@@ -630,6 +630,18 @@ def onboarding_hosts(requested_hosts: list[str] | None, *, current_host: bool) -
     return unique_hosts
 
 
+def resolved_onboarding_hosts(requested_hosts: list[str] | None, *, current_host: bool, all_hosts: bool = False) -> list[str]:
+    if all_hosts:
+        return list(SUPPORTED_ONBOARDING_HOSTS)
+    return onboarding_hosts(requested_hosts, current_host=current_host)
+
+
+def resolved_setup_hosts(requested_hosts: list[str] | None, *, current_host: bool, all_hosts: bool = False) -> list[str]:
+    if all_hosts:
+        return list(SUPPORTED_ONBOARDING_HOSTS)
+    return setup_hosts(requested_hosts, current_host=current_host)
+
+
 def mcp_server_spec() -> dict[str, object]:
     if os.environ.get("RELAYKIT_PREFER_SOURCE_MCP") == "1" or running_from_source_tree():
         return {
@@ -2798,7 +2810,7 @@ def command_stack(args: argparse.Namespace) -> int:
 
 
 def command_host_status(args: argparse.Namespace) -> int:
-    hosts = onboarding_hosts(args.host, current_host=args.current_host)
+    hosts = resolved_onboarding_hosts(args.host, current_host=args.current_host, all_hosts=bool(getattr(args, "all_hosts", False)))
     hosts_payload = [host_onboarding_status(host_name) for host_name in hosts]
     payload = {
         "product": PRODUCT_NAME,
@@ -2812,7 +2824,7 @@ def command_host_status(args: argparse.Namespace) -> int:
 
 
 def command_bootstrap_host(args: argparse.Namespace) -> int:
-    hosts = onboarding_hosts(args.host, current_host=args.current_host)
+    hosts = resolved_onboarding_hosts(args.host, current_host=args.current_host, all_hosts=bool(getattr(args, "all_hosts", False)))
     payload = {
         "product": PRODUCT_NAME,
         "server": mcp_server_spec(),
@@ -2893,7 +2905,7 @@ def build_setup_payload(
 
 
 def command_setup(args: argparse.Namespace) -> int:
-    hosts = setup_hosts(args.host, current_host=args.current_host)
+    hosts = resolved_setup_hosts(args.host, current_host=args.current_host, all_hosts=bool(getattr(args, "all_hosts", False)))
     payload = build_setup_payload(
         hosts=hosts,
         workspace_root=Path(args.workspace_root).resolve() if args.workspace_root else None,
@@ -2926,7 +2938,7 @@ def command_prepare_git(args: argparse.Namespace) -> int:
 
 
 def command_uninstall_host(args: argparse.Namespace) -> int:
-    hosts = onboarding_hosts(args.host, current_host=args.current_host)
+    hosts = resolved_onboarding_hosts(args.host, current_host=args.current_host, all_hosts=bool(getattr(args, "all_hosts", False)))
     payload = {
         "product": PRODUCT_NAME,
         "server": mcp_server_spec(),
@@ -2945,7 +2957,7 @@ def command_uninstall_host(args: argparse.Namespace) -> int:
 
 
 def command_acknowledge_host(args: argparse.Namespace) -> int:
-    hosts = onboarding_hosts(args.host, current_host=args.current_host)
+    hosts = resolved_onboarding_hosts(args.host, current_host=args.current_host, all_hosts=bool(getattr(args, "all_hosts", False)))
     state = load_onboarding_state()
     for host_name in hosts:
         entry = host_state(state, host_name)
@@ -3058,7 +3070,7 @@ def build_smoke_payload(
 
 
 def command_smoke(args: argparse.Namespace) -> int:
-    hosts = setup_hosts(args.host, current_host=args.current_host)
+    hosts = resolved_setup_hosts(args.host, current_host=args.current_host, all_hosts=bool(getattr(args, "all_hosts", False)))
     payload = build_smoke_payload(
         hosts=hosts,
         workspace_root=Path(args.workspace_root).resolve() if args.workspace_root else None,
@@ -4233,6 +4245,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser_host_status.add_argument("--host", action="append")
     parser_host_status.add_argument(
+        "--all-hosts",
+        action="store_true",
+        help=f"Target all supported hosts: {', '.join(SUPPORTED_ONBOARDING_HOSTS)}.",
+    )
+    parser_host_status.add_argument(
         "--current-host",
         action="store_true",
         help="Auto-detect the current host (Codex today, or use RELAYKIT_HOST to override).",
@@ -4258,6 +4275,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser_bootstrap_host.add_argument("--host", action="append")
     parser_bootstrap_host.add_argument(
+        "--all-hosts",
+        action="store_true",
+        help=f"Target all supported hosts: {', '.join(SUPPORTED_ONBOARDING_HOSTS)}.",
+    )
+    parser_bootstrap_host.add_argument(
         "--current-host",
         action="store_true",
         help="Auto-detect the current host (Codex today, or use RELAYKIT_HOST to override).",
@@ -4279,12 +4301,18 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=(
             "Examples:\n"
             "  relaykit setup --host codex --force\n"
+            "  relaykit setup --all-hosts\n"
             "  relaykit setup --current-host\n"
             "  relaykit setup --host claude-code --dry-run\n"
             "  relaykit setup --host gemini-cli --skip-smoke"
         ),
     )
     parser_setup.add_argument("--host", action="append")
+    parser_setup.add_argument(
+        "--all-hosts",
+        action="store_true",
+        help=f"Target all supported hosts: {', '.join(SUPPORTED_ONBOARDING_HOSTS)}.",
+    )
     parser_setup.add_argument(
         "--current-host",
         action="store_true",
@@ -4305,6 +4333,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser_uninstall_host.add_argument("--host", action="append")
     parser_uninstall_host.add_argument(
+        "--all-hosts",
+        action="store_true",
+        help=f"Target all supported hosts: {', '.join(SUPPORTED_ONBOARDING_HOSTS)}.",
+    )
+    parser_uninstall_host.add_argument(
         "--current-host",
         action="store_true",
         help="Auto-detect the current host (Codex today, or use RELAYKIT_HOST to override).",
@@ -4319,6 +4352,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Record that host onboarding was offered and explicitly deferred.",
     )
     parser_ack_host.add_argument("--host", action="append")
+    parser_ack_host.add_argument(
+        "--all-hosts",
+        action="store_true",
+        help=f"Target all supported hosts: {', '.join(SUPPORTED_ONBOARDING_HOSTS)}.",
+    )
     parser_ack_host.add_argument(
         "--current-host",
         action="store_true",
@@ -4366,11 +4404,17 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=(
             "Examples:\n"
             "  relaykit smoke --host codex\n"
+            "  relaykit smoke --all-hosts\n"
             "  relaykit smoke --host antigravity --workspace-root /private/tmp/relaykit-antigravity-smoke\n"
             "  relaykit smoke --current-host"
         ),
     )
     parser_smoke.add_argument("--host", action="append")
+    parser_smoke.add_argument(
+        "--all-hosts",
+        action="store_true",
+        help=f"Target all supported hosts: {', '.join(SUPPORTED_ONBOARDING_HOSTS)}.",
+    )
     parser_smoke.add_argument(
         "--current-host",
         action="store_true",

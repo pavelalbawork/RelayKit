@@ -9,14 +9,18 @@ RelayKit augments existing harnesses like Codex, Claude Code, Gemini CLI, and An
 Install RelayKit:
 
 ```bash
-pipx install -e .
+pipx install "git+https://github.com/pavelalbawork/RelayKit.git"
 pipx ensurepath
 ```
 
-Run that from inside the RelayKit repo checkout. If you are installing from somewhere else, use the full path instead:
+That is the normal install path. It does not require cloning the repo first.
+
+If you want a local editable install instead:
 
 ```bash
-pipx install -e /path/to/relaykit
+git clone git@github.com:pavelalbawork/RelayKit.git
+cd RelayKit
+pipx install -e .
 pipx ensurepath
 ```
 
@@ -38,10 +42,28 @@ Or continue immediately with:
 ~/.local/bin/relaykit setup --host codex
 ```
 
+Supported hosts:
+- `codex`
+- `claude-code`
+- `gemini-cli`
+- `antigravity`
+
+Run setup once per host you want available. To wire all supported hosts in one pass:
+
+```bash
+relaykit setup --all-hosts
+```
+
 Then restart your host and say:
 
 ```text
-Use RelayKit MCP tools directly and help me finish setup if anything is still missing.
+Use RelayKit MCP tools directly.
+```
+
+If you want a local working copy without keeping the upstream remote:
+
+```bash
+git remote remove origin
 ```
 
 If `pipx` is unavailable, use:

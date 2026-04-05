@@ -11,14 +11,18 @@ Task intake, lane recommendation, onboarding, checkpoints, handoffs, and learnin
 Install RelayKit:
 
 ```bash
-pipx install -e .
+pipx install "git+https://github.com/pavelalbawork/RelayKit.git"
 pipx ensurepath
 ```
 
-Run that from inside the RelayKit repo checkout. If you are installing from somewhere else, use the full path instead:
+That is the normal install path. It does not require cloning the repo first.
+
+If you are developing locally or want an editable install from a checkout, clone the repo and install from the working tree instead:
 
 ```bash
-pipx install -e /path/to/relaykit
+git clone git@github.com:pavelalbawork/RelayKit.git
+cd RelayKit
+pipx install -e .
 pipx ensurepath
 ```
 
@@ -41,6 +45,18 @@ If you want to continue immediately without reloading the shell, use the direct 
 ```
 
 Swap `codex` for `claude-code`, `gemini-cli`, or `antigravity`.
+
+Supported hosts:
+- `codex`
+- `claude-code`
+- `gemini-cli`
+- `antigravity`
+
+Run setup once per host you actually want RelayKit available in. To wire all supported hosts in one pass:
+
+```bash
+relaykit setup --all-hosts
+```
 
 Then restart your host and say:
 
@@ -116,11 +132,50 @@ In a normal terminal, `setup` now prints a short human-readable summary by defau
 
 The setup smoke is pinned to the host you selected, so `relaykit setup --host codex` verifies a Codex-only path instead of drifting to another host during the smoke recommendation.
 
+Run it once per host you want to use with RelayKit. For example:
+
+```bash
+relaykit setup --host codex
+relaykit setup --host claude-code
+```
+
+Or wire all supported hosts in one pass:
+
+```bash
+relaykit setup --all-hosts
+```
+
 Use `relaykit host-status --host <host>` when you want a readiness check without changing anything.
 
 ## More Install Options
 
-**Recommended — `pipx` (global, no activation needed):**
+**Install directly from GitHub (recommended for normal use):**
+
+```bash
+pipx install "git+https://github.com/pavelalbawork/RelayKit.git"
+pipx ensurepath
+relaykit --version
+relaykit-mcp --help
+```
+
+This is the simplest path for most users. No local checkout is required.
+
+**Clone the repo locally first (recommended for development):**
+
+```bash
+git clone git@github.com:pavelalbawork/RelayKit.git
+cd RelayKit
+pipx install -e .
+pipx ensurepath
+```
+
+If you want a local working copy without keeping the upstream remote attached:
+
+```bash
+git remote remove origin
+```
+
+**Editable `pipx` from a local checkout:**
 
 ```bash
 pipx install -e .

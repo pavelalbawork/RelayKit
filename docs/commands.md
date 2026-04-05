@@ -67,6 +67,12 @@ relaykit run --workspace-root . --task "Fix the auth bug"
 
 `setup` and `smoke` also default to `--format auto`, so a normal terminal gets a concise human-readable summary while redirected output stays JSON-safe. Use `--format json` when you want the raw payload.
 
+Supported host ids:
+- `codex`
+- `claude-code`
+- `gemini-cli`
+- `antigravity`
+
 **Simple solo task:**
 ```bash
 relaykit start-task --workspace-root . --task "Fix the auth bug"
@@ -125,6 +131,17 @@ rm -rf ~/.codex/skills/relaykit*
 ```
 
 Only remove the skill folders if you copied them manually with the skills-only fallback.
+
+**Wire every supported host in one pass:**
+```bash
+relaykit setup --all-hosts
+```
+
+You can also repeat `--host`:
+
+```bash
+relaykit setup --host codex --host claude-code --host gemini-cli --host antigravity
+```
 
 ## MCP Tools
 
