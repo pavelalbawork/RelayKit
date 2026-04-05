@@ -2522,6 +2522,12 @@ def run_smoke_flow(workspace_root: Path, *, host_name: str, force_workspace_init
 
     workspace_profile_path_resolved = workspace_profile_path(workspace_root, registry)
     workspace_profile = read_json(workspace_profile_path_resolved)
+    workspace_profile["inventory"]["available_hosts"] = [host_name]
+    allowed_models = workspace_profile["inventory"].get("allowed_models_by_host", {})
+    workspace_profile["inventory"]["allowed_models_by_host"] = {
+        host_name: list(allowed_models.get(host_name, []))
+    }
+    write_json(workspace_profile_path_resolved, workspace_profile)
 
     task_started = taskflow.start_task(
         registry,
@@ -2531,7 +2537,7 @@ def run_smoke_flow(workspace_root: Path, *, host_name: str, force_workspace_init
         project_profile=None,
         task_text=SMOKE_TASK_TEXT,
         task_scope=None,
-        allowed_hosts=None,
+        allowed_hosts=[host_name],
         skip_clarification=False,
     )
     task_id = task_started["task_id"]
@@ -2897,7 +2903,7 @@ def command_setup(args: argparse.Namespace) -> int:
         force=bool(args.force),
         dry_run=bool(args.dry_run),
     )
-    print(json.dumps(payload, indent=2))
+    print_support_payload(payload, format_name=getattr(args, "format", "auto"), command_name="setup")
     return 0
 
 
@@ -3058,7 +3064,7 @@ def command_smoke(args: argparse.Namespace) -> int:
         workspace_root=Path(args.workspace_root).resolve() if args.workspace_root else None,
         force=bool(args.force),
     )
-    print(json.dumps(payload, indent=2))
+    print_support_payload(payload, format_name=getattr(args, "format", "auto"), command_name="smoke")
     return 0
 
 
@@ -3347,7 +3353,56 @@ def _human_render_reflection(payload: dict) -> str:
     return "\n".join(lines)
 
 
+def _human_render_setup(payload: dict) -> str:
+    lines = [f"{payload.get('product', PRODUCT_NAME)} setup complete."]
+    results = ((payload.get("bootstrap") or {}).get("results")) or []
+    for result in results:
+        host_name = result.get("host")
+        lines.append(f"- {host_name}: wiring applied")
+        skills = result.get("skills") or {}
+        mcp = result.get("mcp") or {}
+        _append_line(lines, "  skills", "installed" if skills.get("configured") else "not installed")
+        _append_line(lines, "  mcp", "configured" if mcp.get("configured") else "not configured")
+    smoke = payload.get("smoke") or {}
+    for host_name, smoke_payload in smoke.items():
+        smoke_results = smoke_payload.get("results") or []
+        succeeded = all(step.get("status") == "succeeded" for step in smoke_results)
+        lines.append(f"- {host_name} smoke: {'passed' if succeeded else 'needs review'}")
+    restart_hints = payload.get("restart_hints") or {}
+    for host_name, hint in restart_hints.items():
+        _append_line(lines, f"{host_name} restart", hint)
+    next_prompts = payload.get("next_prompts") or {}
+    for host_name, prompt in next_prompts.items():
+        lines.append(f"{host_name} next prompt:")
+        lines.append(prompt)
+    return "\n".join(lines)
+
+
+def _human_render_smoke(payload: dict) -> str:
+    lines = [f"{payload.get('product', PRODUCT_NAME)} smoke complete."]
+    smoke = payload.get("smoke") or {}
+    for host_name, smoke_payload in smoke.items():
+        smoke_results = smoke_payload.get("results") or []
+        succeeded = all(step.get("status") == "succeeded" for step in smoke_results)
+        lines.append(f"- {host_name}: {'passed' if succeeded else 'needs review'}")
+        _append_line(lines, "  task_id", smoke_payload.get("task_id"))
+        reflection = smoke_payload.get("reflection") or {}
+        summary = reflection.get("reflection") or {}
+        selected_hosts = summary.get("selected_hosts") or []
+        if selected_hosts:
+            _append_line(lines, "  selected hosts", ", ".join(selected_hosts))
+    next_prompts = payload.get("next_prompts") or {}
+    for host_name, prompt in next_prompts.items():
+        lines.append(f"{host_name} next prompt:")
+        lines.append(prompt)
+    return "\n".join(lines)
+
+
 def render_taskflow_payload(payload: dict, *, command_name: str) -> str:
+    if command_name == "setup":
+        return _human_render_setup(payload)
+    if command_name == "smoke":
+        return _human_render_smoke(payload)
     if command_name in {"start-task", "answer-task"}:
         if payload.get("stage") == "clarification":
             return _human_render_clarification(payload)
@@ -3508,6 +3563,14 @@ def command_run(args: argparse.Namespace) -> int:
 
 
 def print_taskflow_payload(payload: dict, *, format_name: str, command_name: str) -> None:
+    output_format = _resolve_output_format(format_name)
+    if output_format == "human":
+        print(render_taskflow_payload(payload, command_name=command_name))
+        return
+    print(json.dumps(payload, indent=2))
+
+
+def print_support_payload(payload: dict, *, format_name: str, command_name: str) -> None:
     output_format = _resolve_output_format(format_name)
     if output_format == "human":
         print(render_taskflow_payload(payload, command_name=command_name))
@@ -4233,6 +4296,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser_setup.add_argument("--skip-smoke", action="store_true")
     parser_setup.add_argument("--dry-run", action="store_true")
     parser_setup.add_argument("--force", action="store_true")
+    parser_setup.add_argument("--format", choices=["auto", "human", "json"], default="auto")
     parser_setup.set_defaults(func=command_setup)
 
     parser_uninstall_host = subparsers.add_parser(
@@ -4314,6 +4378,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser_smoke.add_argument("--workspace-root")
     parser_smoke.add_argument("--force", action="store_true")
+    parser_smoke.add_argument("--format", choices=["auto", "human", "json"], default="auto")
     parser_smoke.set_defaults(func=command_smoke)
 
     parser_doctor = subparsers.add_parser(

@@ -9,13 +9,33 @@ RelayKit augments existing harnesses like Codex, Claude Code, Gemini CLI, and An
 Install RelayKit:
 
 ```bash
+pipx install -e .
+pipx ensurepath
+```
+
+Run that from inside the RelayKit repo checkout. If you are installing from somewhere else, use the full path instead:
+
+```bash
 pipx install -e /path/to/relaykit
+pipx ensurepath
 ```
 
 Wire your host:
 
 ```bash
 relaykit setup --host codex
+```
+
+If your current shell still cannot find `relaykit`, run:
+
+```bash
+exec zsh
+```
+
+Or continue immediately with:
+
+```bash
+~/.local/bin/relaykit setup --host codex
 ```
 
 Then restart your host and say:

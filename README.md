@@ -11,13 +11,33 @@ Task intake, lane recommendation, onboarding, checkpoints, handoffs, and learnin
 Install RelayKit:
 
 ```bash
+pipx install -e .
+pipx ensurepath
+```
+
+Run that from inside the RelayKit repo checkout. If you are installing from somewhere else, use the full path instead:
+
+```bash
 pipx install -e /path/to/relaykit
+pipx ensurepath
 ```
 
 Wire your host:
 
 ```bash
 relaykit setup --host codex
+```
+
+If your shell still says `command not found: relaykit`, reload it once:
+
+```bash
+exec zsh
+```
+
+If you want to continue immediately without reloading the shell, use the direct `pipx` app path once:
+
+```bash
+~/.local/bin/relaykit setup --host codex
 ```
 
 Swap `codex` for `claude-code`, `gemini-cli`, or `antigravity`.
@@ -92,6 +112,10 @@ Remove RelayKit from this machine completely, including host wiring and any copi
 - runs a safe local smoke test
 - prints the exact next prompt for that host
 
+In a normal terminal, `setup` now prints a short human-readable summary by default. Use `--format json` if you want the full machine payload.
+
+The setup smoke is pinned to the host you selected, so `relaykit setup --host codex` verifies a Codex-only path instead of drifting to another host during the smoke recommendation.
+
 Use `relaykit host-status --host <host>` when you want a readiness check without changing anything.
 
 ## More Install Options
@@ -99,10 +123,15 @@ Use `relaykit host-status --host <host>` when you want a readiness check without
 **Recommended — `pipx` (global, no activation needed):**
 
 ```bash
-pipx install -e /path/to/relaykit
+pipx install -e .
+pipx ensurepath
 relaykit --version
 relaykit-mcp --help
 ```
+
+Run that from inside the RelayKit repo checkout. If you are not in the repo directory, replace `.` with the full checkout path.
+
+If `relaykit` is still not found right after install, your current shell has not reloaded the updated PATH yet. Run `exec zsh`, open a new terminal, or use `~/.local/bin/relaykit` once.
 
 `pipx` installs into an isolated environment and puts `relaykit` and `relaykit-mcp` on your PATH globally. No venv activation, works from any directory or shell.
 

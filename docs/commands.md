@@ -65,6 +65,8 @@ relaykit run --workspace-root . --task "Fix the auth bug"
 
 `run` is the easiest human-first entrypoint. It walks clarifications interactively, prints the verdict (`manual`, `lean`, or `full`), and then confirms or revises the setup without making you chain commands manually.
 
+`setup` and `smoke` also default to `--format auto`, so a normal terminal gets a concise human-readable summary while redirected output stays JSON-safe. Use `--format json` when you want the raw payload.
+
 **Simple solo task:**
 ```bash
 relaykit start-task --workspace-root . --task "Fix the auth bug"
