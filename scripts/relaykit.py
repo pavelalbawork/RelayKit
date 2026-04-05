@@ -3358,23 +3358,23 @@ def _human_render_setup(payload: dict) -> str:
     results = ((payload.get("bootstrap") or {}).get("results")) or []
     for result in results:
         host_name = result.get("host")
-        lines.append(f"- {host_name}: wiring applied")
+        host_summary: list[str] = ["wiring applied"]
         skills = result.get("skills") or {}
         mcp = result.get("mcp") or {}
-        _append_line(lines, "  skills", "installed" if skills.get("configured") else "not installed")
-        _append_line(lines, "  mcp", "configured" if mcp.get("configured") else "not configured")
-    smoke = payload.get("smoke") or {}
-    for host_name, smoke_payload in smoke.items():
-        smoke_results = smoke_payload.get("results") or []
-        succeeded = all(step.get("status") == "succeeded" for step in smoke_results)
-        lines.append(f"- {host_name} smoke: {'passed' if succeeded else 'needs review'}")
+        host_summary.append(f"skills {'installed' if skills.get('configured') else 'not installed'}")
+        host_summary.append(f"mcp {'configured' if mcp.get('configured') else 'not configured'}")
+        smoke = (payload.get("smoke") or {}).get(host_name)
+        if smoke is not None:
+            smoke_results = smoke.get("results") or []
+            succeeded = all(step.get("status") == "succeeded" for step in smoke_results)
+            host_summary.append(f"smoke {'passed' if succeeded else 'needs review'}")
+        lines.append(f"- {host_name}: {', '.join(host_summary)}")
     restart_hints = payload.get("restart_hints") or {}
     for host_name, hint in restart_hints.items():
         _append_line(lines, f"{host_name} restart", hint)
-    next_prompts = payload.get("next_prompts") or {}
-    for host_name, prompt in next_prompts.items():
-        lines.append(f"{host_name} next prompt:")
-        lines.append(prompt)
+    lines.append("Next: use RelayKit MCP tools directly in your host.")
+    if not payload.get("smoke"):
+        lines.append("Optional: run `relaykit smoke --host <host>` when you want a full lifecycle check.")
     return "\n".join(lines)
 
 
@@ -4270,11 +4270,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser_setup = subparsers.add_parser(
         "setup",
-        help="One-command first-use setup: wire the host, run a safe CLI smoke test, and print the next prompt.",
+        help="One-command first-use setup: wire the host, run a safe CLI smoke test, and print concise next steps.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description=(
             "Bootstrap one host for first use, optionally run a local RelayKit smoke flow, "
-            "and print the exact next MCP prompt to start."
+            "and print concise next steps for entering the MCP path."
         ),
         epilog=(
             "Examples:\n"

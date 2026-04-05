@@ -45,7 +45,7 @@ Swap `codex` for `claude-code`, `gemini-cli`, or `antigravity`.
 Then restart your host and say:
 
 ```text
-Use RelayKit MCP tools directly and help me finish setup if anything is still missing.
+Use RelayKit MCP tools directly.
 ```
 
 That is the main first-use path. Most users should stop there.
@@ -62,7 +62,7 @@ python3 scripts/relaykit.py setup --host codex --force
 Then restart your host and use the same prompt:
 
 ```text
-Use RelayKit MCP tools directly and help me finish setup if anything is still missing.
+Use RelayKit MCP tools directly.
 ```
 
 ## Remove RelayKit Completely
@@ -110,7 +110,7 @@ Remove RelayKit from this machine completely, including host wiring and any copi
 
 - wires the selected host
 - runs a safe local smoke test
-- prints the exact next prompt for that host
+- prints concise next steps for entering the MCP path
 
 In a normal terminal, `setup` now prints a short human-readable summary by default. Use `--format json` if you want the full machine payload.
 

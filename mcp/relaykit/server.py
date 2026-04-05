@@ -832,7 +832,7 @@ TOOLS: dict[str, dict[str, Any]] = {
         "handler": tool_guided_setup,
     },
     "relaykit_setup": {
-        "description": "Run the first-use RelayKit setup flow: wire the host, optionally run the local smoke test, and return the exact next prompt to start.",
+        "description": "Run the first-use RelayKit setup flow: wire the host, optionally run the local smoke test, and return concise next steps for entering the MCP path.",
         "inputSchema": {
             "type": "object",
             "properties": {
