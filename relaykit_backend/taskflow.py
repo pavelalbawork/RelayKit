@@ -74,8 +74,6 @@ REVIEW_KEYWORDS = {
     "audit",
     "hardening",
     "qa",
-    "verify",
-    "verification",
     "feedback",
 }
 RESEARCH_KEYWORDS = {
@@ -89,6 +87,12 @@ RESEARCH_KEYWORDS = {
     "decide",
     "evaluate",
     "analyze",
+    "design decisions",
+    "architecture decisions",
+    "technical spike",
+    "spike",
+    "consolidate",
+    "synthesis",
 }
 IMPLEMENTATION_KEYWORDS = {
     "build",
@@ -102,8 +106,17 @@ IMPLEMENTATION_KEYWORDS = {
     "develop",
     "edit",
 }
-BUGFIX_KEYWORDS = {"bug", "fix", "broken", "regression", "error", "issue"}
-PAUSE_KEYWORDS = {"later", "resume", "continue later", "checkpoint", "phase"}
+BUGFIX_KEYWORDS = {"bug", "fix", "broken", "regression"}
+PAUSE_KEYWORDS = {"resume", "continue later", "checkpoint", "pick up later"}
+PRE_IMPLEMENTATION_PATTERNS = (
+    r"\bpre(?:-|\s)implementation\b",
+    r"\bresearch(?:-|\s)?first\b",
+    r"\bbefore (?:any )?(?:implementation|coding|execution|development) (?:starts?|begins?)\b",
+    r"\bno implementation yet\b",
+    r"\bdon['’]?t (?:implement|build|code) yet\b",
+    r"\ball decisions must be made before any implementation starts\b",
+    r"\bimplementation-ready brief\b",
+)
 
 
 def now_iso() -> str:
@@ -127,6 +140,25 @@ def dedupe(items: list[str]) -> list[str]:
             seen.add(item)
             result.append(item)
     return result
+
+
+def _term_pattern(term: str) -> str:
+    escaped = re.escape(term)
+    escaped = escaped.replace(r"\ ", r"\s+")
+    escaped = escaped.replace(r"\-", r"(?:-|\s)")
+    return rf"(?<!\w){escaped}(?!\w)"
+
+
+def _text_contains_term(text: str, term: str) -> bool:
+    return re.search(_term_pattern(term), text) is not None
+
+
+def _keyword_matches(text: str, keywords: set[str]) -> list[str]:
+    return [keyword for keyword in keywords if _text_contains_term(text, keyword)]
+
+
+def _matches_any_pattern(text: str, patterns: tuple[str, ...]) -> bool:
+    return any(re.search(pattern, text) for pattern in patterns)
 
 
 def slugify(text: str) -> str:
@@ -553,20 +585,34 @@ def classify_task(state: dict[str, Any], registry: dict[str, Any]) -> dict[str, 
             state["task"].get("remaining_uncertainty") or "",
         ]
     ).lower()
+    manual_setup = state.get("manual_overrides", {})
+    pre_implementation_research = bool(manual_setup.get("pre_implementation_research")) or _matches_any_pattern(
+        text,
+        PRE_IMPLEMENTATION_PATTERNS,
+    )
+    frontend_matches = _keyword_matches(text, FRONTEND_KEYWORDS)
+    review_matches = _keyword_matches(text, REVIEW_KEYWORDS)
+    research_matches = _keyword_matches(text, RESEARCH_KEYWORDS)
+    implementation_matches = _keyword_matches(text, IMPLEMENTATION_KEYWORDS)
+    bugfix_matches = _keyword_matches(text, BUGFIX_KEYWORDS)
+    pause_matches = _keyword_matches(text, PAUSE_KEYWORDS)
     flags = {
-        "frontend": any(token in text for token in FRONTEND_KEYWORDS),
-        "review": any(token in text for token in REVIEW_KEYWORDS),
-        "research": any(token in text for token in RESEARCH_KEYWORDS),
-        "implementation": any(token in text for token in IMPLEMENTATION_KEYWORDS),
-        "bugfix": any(token in text for token in BUGFIX_KEYWORDS),
-        "pause_sensitive": any(token in text for token in PAUSE_KEYWORDS),
+        "frontend": bool(frontend_matches),
+        "review": bool(review_matches),
+        "research": bool(research_matches) or pre_implementation_research,
+        "implementation": bool(implementation_matches),
+        "bugfix": bool(bugfix_matches),
+        "pause_sensitive": bool(pause_matches),
         "cross_project": state["scope"] == "workspace",
     }
+    if pre_implementation_research:
+        flags["implementation"] = False
+        flags["bugfix"] = False
 
     if flags["review"] and not flags["implementation"] and not flags["research"]:
         task_type = "review-only"
         archetype = "review-hardening"
-    elif flags["research"] and not flags["implementation"]:
+    elif pre_implementation_research or (flags["research"] and not flags["implementation"]):
         task_type = "exploratory"
         archetype = "research-plan"
     elif flags["frontend"] and flags["implementation"]:
@@ -610,6 +656,7 @@ def classify_task(state: dict[str, Any], registry: dict[str, Any]) -> dict[str, 
         "archetype": archetype,
         "confidence": confidence,
         "flags": flags,
+        "pre_implementation_research": pre_implementation_research,
         "remaining_uncertainty": remaining_uncertainty,
     }
 
@@ -878,6 +925,7 @@ def choose_task_parts(
 ) -> list[dict[str, Any]]:
     flags = classification["flags"]
     research_required = flags["research"] or force_research
+    pre_implementation_research = bool(classification.get("pre_implementation_research"))
     task_type = classification["task_type"]
     if task_type == "review-only":
         return [
@@ -890,8 +938,8 @@ def choose_task_parts(
                 "lane_hint": "reviewer" if coordination == "coordinated" else "critic",
             }
         ]
-    if research_required and not flags["implementation"]:
-        return [
+    if research_required and (pre_implementation_research or not flags["implementation"]):
+        parts = [
             {
                 "part_id": "research",
                 "name": "research",
@@ -901,6 +949,30 @@ def choose_task_parts(
                 "lane_hint": "planner",
             }
         ]
+        if coordination == "coordinated":
+            if flags["frontend"]:
+                parts.append(
+                    {
+                        "part_id": "design",
+                        "name": "design exploration",
+                        "objective": "Explore the UX, visual system, and component choices before implementation starts.",
+                        "role": "builder",
+                        "capabilities": ["frontend", "design", "research"],
+                        "lane_hint": "frontend-builder",
+                    }
+                )
+            if continuity == "full":
+                parts.append(
+                    {
+                        "part_id": "synthesis",
+                        "name": "synthesis",
+                        "objective": "Consolidate findings into an implementation-ready brief with decisions, tradeoffs, and open questions.",
+                        "role": "converger",
+                        "capabilities": ["research", "synthesis", "decision-making"],
+                        "lane_hint": "planner",
+                    }
+                )
+        return parts
 
     parts: list[dict[str, Any]] = []
     if flags["frontend"]:
@@ -1151,6 +1223,21 @@ def _change_requests_research(change_text: str) -> bool:
         r"\bgather evidence\b",
         r"\bmore evidence\b",
         r"\bvalidate assumptions\b",
+    )
+    return any(re.search(pattern, lowered) for pattern in targeted_patterns)
+
+
+def _change_requests_pre_implementation(change_text: str) -> bool:
+    lowered = change_text.lower()
+    targeted_patterns = (
+        r"\bpre(?:-|\s)implementation\b",
+        r"\bresearch(?:-|\s)?first\b",
+        r"\bno implementation yet\b",
+        r"\bdon['’]?t (?:implement|build|code) yet\b",
+        r"\bbefore (?:implementation|coding|execution|development)\b",
+        r"\ball decisions (?:must|should) be made before any implementation starts\b",
+        r"\bdesign decisions?\b",
+        r"\barchitecture decisions?\b",
     )
     return any(re.search(pattern, lowered) for pattern in targeted_patterns)
 
@@ -2189,12 +2276,18 @@ def apply_change_request(
         state["manual_overrides"]["continuity"] = "lean"
     if re.search(r"\bfull\b", lowered):
         state["manual_overrides"]["continuity"] = "full"
+    if _change_requests_pre_implementation(change_text):
+        state["manual_overrides"]["pre_implementation_research"] = True
+        state["manual_overrides"]["force_research"] = True
+        state["manual_overrides"]["coordination"] = "coordinated"
+        state["manual_overrides"]["continuity"] = "full"
     if _change_requests_research(change_text):
         state["manual_overrides"]["force_research"] = True
         state["manual_overrides"]["coordination"] = "coordinated"
         state["manual_overrides"]["continuity"] = "full"
     elif re.search(r"\b(no research|without research|skip research)\b", lowered):
         state["manual_overrides"]["force_research"] = False
+        state["manual_overrides"]["pre_implementation_research"] = False
     parsed = parse_constraint_text(
         change_text,
         registry,
