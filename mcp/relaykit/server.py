@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import sys
 import time
+import traceback
 from typing import Any, Callable
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -84,6 +85,17 @@ def make_taskflow_result(payload: dict[str, Any], *, command_name: str) -> dict[
     return make_text_result(text, structured=structured)
 
 
+def build_ping_payload() -> dict[str, Any]:
+    return {
+        "product": relaykit.PRODUCT_NAME,
+        "server": SERVER_INFO["name"],
+        "version": SERVER_INFO["version"],
+        "status": "ok",
+        "tool_count": len(TOOLS),
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+
+
 def validate_registry_or_fail() -> dict[str, Any]:
     registry = relaykit.load_registry()
     issues = relaykit.validate_registry(registry)
@@ -148,7 +160,13 @@ def tool_doctor(arguments: dict[str, Any]) -> dict[str, Any]:
     )
     if execution_context_paths:
         payload["execution_context_paths"] = execution_context_paths
-    return make_taskflow_result(payload, command_name="start-task")
+    return make_taskflow_result(payload, command_name="doctor")
+
+
+def tool_ping(arguments: dict[str, Any]) -> dict[str, Any]:
+    _ = arguments
+    payload = build_ping_payload()
+    return make_taskflow_result(payload, command_name="ping")
 
 
 def tool_host_status(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -560,7 +578,7 @@ def tool_list_tasks(arguments: dict[str, Any]) -> dict[str, Any]:
         root=storage_root,
         status_filter=arguments.get("status"),
     )
-    return make_taskflow_result(payload, command_name="confirm-task")
+    return make_taskflow_result(payload, command_name="list-tasks")
 
 
 def tool_confirm_task(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -776,6 +794,15 @@ def tool_reflect_task(arguments: dict[str, Any]) -> dict[str, Any]:
 
 
 TOOLS: dict[str, dict[str, Any]] = {
+    "relaykit_ping": {
+        "description": "Cheap RelayKit MCP health check. Use this first when you only need to verify the MCP session is alive before calling heavier tools like doctor or start_task.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        },
+        "handler": tool_ping,
+    },
     "relaykit_doctor": {
         "description": "Safe first RelayKit MCP call. Validate runtime state and inspect workspace or project profiles. If the workspace profile is missing, this tool still succeeds and reports the missing status plus next_actions instead of failing.",
         "inputSchema": {
@@ -1403,7 +1430,9 @@ SDK_SERVER = Server(
     name=SERVER_INFO["name"],
     version=SERVER_INFO["version"],
     instructions=(
-        "Coordinate multiple AI coding agents working in parallel, with human checkpoints between phases."
+        "Use RelayKit when the user wants to parallelize work, split work across tools, or assign lanes before execution. "
+        "If an MCP call fails with transport closed after RelayKit tools were visible, treat it as a dropped session, retry once with `relaykit_ping` or `relaykit_doctor`, "
+        "and avoid claiming RelayKit is unavailable unless the retry also fails."
     ),
 )
 
@@ -1432,14 +1461,40 @@ async def handle_call_tool(name: str, arguments: dict[str, Any] | None) -> mcp_t
     try:
         result = TOOLS[tool_name]["handler"](tool_arguments)
     except Exception as exc:
-        log_event(f"tools/call error tool={tool_name!r} error={exc}", level="error")
+        tb = traceback.format_exc()
+        log_event(f"tools/call error tool={tool_name!r} error={exc}\n{tb}", level="error")
         result = make_text_result(
             json_text({"error": str(exc)}),
             structured={"error": str(exc)},
             is_error=True,
         )
+    try:
+        response = to_call_tool_result(result)
+    except Exception as exc:
+        tb = traceback.format_exc()
+        log_event(f"tools/call serialization error tool={tool_name!r} error={exc}\n{tb}", level="error")
+        fallback = make_text_result(
+            json_text(
+                {
+                    "error": f"RelayKit MCP response serialization failed for `{tool_name}`",
+                    "details": [
+                        "The RelayKit MCP session stayed configured, but the response could not be encoded cleanly.",
+                        "Retry once with `relaykit_ping` or `relaykit_doctor` before treating RelayKit as unavailable.",
+                    ],
+                }
+            ),
+            structured={
+                "error": f"RelayKit MCP response serialization failed for `{tool_name}`",
+                "details": [
+                    "The RelayKit MCP session stayed configured, but the response could not be encoded cleanly.",
+                    "Retry once with `relaykit_ping` or `relaykit_doctor` before treating RelayKit as unavailable.",
+                ],
+            },
+            is_error=True,
+        )
+        response = to_call_tool_result(fallback)
     log_event(f"tools/call response tool={tool_name!r}", level="info")
-    return to_call_tool_result(result)
+    return response
 
 
 async def run_stdio_server() -> None:
@@ -1488,7 +1543,7 @@ def main() -> int:
         log_event("server interrupted; exiting", level="info")
         return 0
     except Exception as exc:
-        log_event(f"server failure error={exc}", level="error")
+        log_event(f"server failure error={exc}\n{traceback.format_exc()}", level="error")
         raise
     log_event("stdio closed; server exiting", level="info")
     return 0

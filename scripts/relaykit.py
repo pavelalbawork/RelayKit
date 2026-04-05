@@ -3261,6 +3261,10 @@ def _human_render_show_task(payload: dict) -> str:
     _append_line(lines, "Status", payload.get("status"))
     _append_line(lines, "Scope", payload.get("scope"))
     _append_line(lines, "Task", payload.get("task"))
+    stale_plan = payload.get("stale_plan") or {}
+    if stale_plan:
+        _append_line(lines, "Plan health", "stale")
+        _append_line(lines, "Plan note", stale_plan.get("message"))
     recommendation = payload.get("recommendation") or {}
     setup = recommendation.get("setup") or {}
     if setup:
@@ -3286,6 +3290,14 @@ def _human_render_show_task(payload: dict) -> str:
         lines.append("Orchestration guidance:")
         for item in guidance:
             lines.append(f"- {item}")
+    source_artifacts = payload.get("source_artifacts") or []
+    if source_artifacts:
+        lines.append("Source artifacts:")
+        for item in source_artifacts:
+            counts = item.get("counts") or {}
+            lines.append(
+                f"- {item.get('status')}: {item.get('source_path')} (open: {counts.get('open', 0)}, addressed: {counts.get('addressed_unverified', 0)}, verified: {counts.get('verified', 0)}, superseded: {counts.get('superseded', 0)})"
+            )
     timeline = payload.get("timeline") or []
     if timeline:
         lines.append("Timeline:")
@@ -3380,7 +3392,14 @@ def _human_render_advance(payload: dict) -> str:
 def _human_render_resume(payload: dict) -> str:
     lines = [f"Task {payload.get('task_id')}", "Resume summary."]
     _append_line(lines, "Status", payload.get("status"))
+    stale_plan = payload.get("stale_plan") or {}
+    if stale_plan:
+        _append_line(lines, "Plan health", "stale")
+        _append_line(lines, "Plan note", stale_plan.get("message"))
     _append_line(lines, "Resume scope", payload.get("resume_scope"))
+    stale_part_ids = payload.get("stale_part_ids") or []
+    if stale_part_ids:
+        _append_line(lines, "Stale parts", ", ".join(stale_part_ids))
     remaining = payload.get("remaining_part_ids") or []
     if remaining:
         _append_line(lines, "Remaining parts", ", ".join(remaining))
@@ -3403,6 +3422,14 @@ def _human_render_resume(payload: dict) -> str:
         lines.append("Orchestration guidance:")
         for item in guidance:
             lines.append(f"- {item}")
+    source_artifacts = payload.get("source_artifacts") or []
+    if source_artifacts:
+        lines.append("Source artifacts:")
+        for item in source_artifacts:
+            counts = item.get("counts") or {}
+            lines.append(
+                f"- {item.get('status')}: {item.get('source_path')} (open: {counts.get('open', 0)}, addressed: {counts.get('addressed_unverified', 0)}, verified: {counts.get('verified', 0)}, superseded: {counts.get('superseded', 0)})"
+            )
     return "\n".join(lines)
 
 
@@ -3428,6 +3455,10 @@ def _human_render_reflection(payload: dict) -> str:
     if issue_updates.get("updated_count"):
         _append_line(lines, "Source issues updated", issue_updates.get("updated_count"))
         _append_line(lines, "Issue state", issue_updates.get("state_path"))
+    supersession = payload.get("source_artifact_supersession") or {}
+    if supersession.get("updated_count"):
+        _append_line(lines, "Source artifacts superseded", supersession.get("updated_count"))
+        _append_line(lines, "Issue state", supersession.get("state_path"))
     return "\n".join(lines)
 
 
@@ -3456,6 +3487,35 @@ def _human_render_setup(payload: dict) -> str:
     return "\n".join(lines)
 
 
+def _human_render_doctor(payload: dict) -> str:
+    lines = [f"{payload.get('product', PRODUCT_NAME)} doctor"]
+    registry = payload.get("registry") or {}
+    _append_line(lines, "Registry", registry.get("status"))
+    workspace = payload.get("workspace_profile") or {}
+    _append_line(lines, "Workspace profile", workspace.get("status"))
+    project = payload.get("project_profile") or {}
+    _append_line(lines, "Project profile", project.get("status"))
+    next_actions = payload.get("next_actions") or []
+    if next_actions:
+        lines.append("Next actions:")
+        for item in next_actions:
+            lines.append(f"- {item}")
+    execution_context_paths = payload.get("execution_context_paths") or []
+    if execution_context_paths:
+        _append_line(lines, "Execution context", ", ".join(execution_context_paths))
+    return "\n".join(lines)
+
+
+def _human_render_ping(payload: dict) -> str:
+    lines = [f"{payload.get('product', PRODUCT_NAME)} MCP health"]
+    _append_line(lines, "Server", payload.get("server"))
+    _append_line(lines, "Version", payload.get("version"))
+    _append_line(lines, "Status", payload.get("status"))
+    _append_line(lines, "Tool count", payload.get("tool_count"))
+    _append_line(lines, "Timestamp", payload.get("timestamp"))
+    return "\n".join(lines)
+
+
 def _human_render_smoke(payload: dict) -> str:
     lines = [f"{payload.get('product', PRODUCT_NAME)} smoke complete."]
     smoke = payload.get("smoke") or {}
@@ -3477,6 +3537,10 @@ def _human_render_smoke(payload: dict) -> str:
 
 
 def render_taskflow_payload(payload: dict, *, command_name: str) -> str:
+    if command_name == "doctor":
+        return _human_render_doctor(payload)
+    if command_name == "ping":
+        return _human_render_ping(payload)
     if command_name == "setup":
         return _human_render_setup(payload)
     if command_name == "smoke":

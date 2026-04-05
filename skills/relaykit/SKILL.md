@@ -44,8 +44,17 @@ This skill does not replace the role skills. It chooses and loads them cleanly s
 4. Once work starts, checkpoint after the first concrete artifact, blocker, or verified finding. Do not wait until the whole task is done.
 5. If RelayKit reports `blocked`, `needs_reroute`, or `ready_for_next_phase`, use `advance-task` immediately instead of continuing in the old phase.
 6. If repo work moved ahead without orchestration progress, run `resume-task`, summarize the required action, and bring RelayKit forward before continuing.
-7. If the task is continuing in full mode, use `checkpoint-task`, `advance-task`, `resume-task`, and `reflect-task` as needed.
-8. Load the matching role skill, host guide, model note, persona, packet, or repo guide from the resolved task parts.
+7. If RelayKit says the saved plan is stale, refresh or reroute it before using the old lane map as current.
+8. If source critique artifacts are marked `partially-addressed`, `addressed-unverified`, or `superseded`, resolve that source state before routing from it again.
+9. If the task is continuing in full mode, use `checkpoint-task`, `advance-task`, `resume-task`, and `reflect-task` as needed.
+10. Load the matching role skill, host guide, model note, persona, packet, or repo guide from the resolved task parts.
+
+MCP transport rule:
+
+- if RelayKit tools were visible but a RelayKit MCP call fails with `Transport closed`, treat it as a dropped MCP session first
+- retry once with `relaykit_ping`
+- then retry with `relaykit_doctor`
+- do not tell the user RelayKit is unavailable unless those retries also fail
 
 ## Practical Rule
 

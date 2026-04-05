@@ -327,6 +327,8 @@ RelayKit also tracks a phase mode for each task (`research-phase`, `review-phase
 
 RelayKit also watches for repo/state drift. If files are changing while a task is still only recommended, or a phase is active but nobody has checkpointed a concrete result yet, `show-task`, `resume-task`, and `inspect-task` now surface drift warnings and orchestration guidance so the operator knows when to confirm, checkpoint, or advance the task state.
 
+RelayKit now also tracks source artifact status for referenced critique and research Markdown files. Follow-up fix packets can mark source issues as `addressed-unverified`, and `show-task` / `resume-task` will mark saved plans as stale when those source artifacts no longer match the backlog they were routed from.
+
 ## Workspace Setup
 
 Save persistent defaults so RelayKit knows your available tools and models:
@@ -335,6 +337,18 @@ Save persistent defaults so RelayKit knows your available tools and models:
 relaykit init-workspace --workspace-root . --start-with-defaults
 relaykit doctor --workspace-root .
 ```
+
+If a host says RelayKit returned `Transport closed`, do not immediately conclude that RelayKit is unavailable. That usually means the MCP session dropped mid-call. Retry once with:
+
+```bash
+relaykit doctor --workspace-root .
+```
+
+And, in an MCP-aware host, prefer this sequence:
+
+1. `relaykit_ping`
+2. `relaykit_doctor`
+3. only then fall back to “RelayKit MCP is unavailable” if both fail
 
 If no workspace profile exists yet and you want a non-interactive first-run path, use the guided flow instead:
 

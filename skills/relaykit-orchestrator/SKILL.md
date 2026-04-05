@@ -51,6 +51,9 @@ Operational timing rules:
 - advance the task immediately when RelayKit reports `blocked`, `needs_reroute`, or `ready_for_next_phase`
 - if repo work is happening while RelayKit still says `recommended`, stop and bring the orchestration state forward
 - if RelayKit returns a required action, treat it as the next command, not a suggestion to maybe follow later
+- if RelayKit says the saved plan is stale, do not keep using the old lane map as if it were still current
+- if source critique artifacts are marked `partially-addressed`, `addressed-unverified`, or `superseded`, resolve that source state before routing follow-up work from it again
+- if RelayKit MCP fails with `Transport closed` after tools were visible, retry once with `relaykit_ping` or `relaykit_doctor` before declaring RelayKit unavailable
 
 ## Output Contract
 

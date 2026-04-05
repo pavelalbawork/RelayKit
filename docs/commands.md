@@ -38,6 +38,7 @@ Task lifecycle commands default to `--format auto`, which means a concise human-
 | `install-self` | Create a venv, install RelayKit, and optionally wire harnesses |
 | `smoke` | Run the reusable local lifecycle smoke flow without changing harness wiring |
 | `doctor` | Validate registry, profiles, schemas, and optional host readiness |
+| `relaykit_ping` (MCP) | Cheap MCP health probe before heavier RelayKit calls |
 
 ## Inspection
 
@@ -118,11 +119,14 @@ RelayKit now also surfaces `drift_warnings` and `orchestration_guidance` in `sho
 
 For critique-driven follow-up work, RelayKit now tracks source issue inventories from referenced Markdown docs and can mark reflected fix packets as `addressed-unverified`. That gives later tasks a structured issue state instead of treating every old critique line as permanently open backlog.
 
+If those source artifacts change state after a plan was generated, `show-task` and `resume-task` now expose `source_artifacts`, mark the saved plan as stale, and stop presenting that stale recommendation as the current truth. Refresh the plan before continuing.
+
 Operational rule:
 - run `confirm-task` before real work starts
 - run `checkpoint-task` or `checkpoint-phase` after the first concrete artifact, blocker, or verified finding
 - run `advance-task` as soon as RelayKit says `blocked`, `needs_reroute`, or `ready_for_next_phase`
 - if `show-task` or `resume-task` returns `required_action`, do that next instead of continuing off-ledger
+- if `show-task` or `resume-task` says the plan is stale, refresh or reroute it before treating the old lane map as current
 - when using the MCP server, summarize RelayKit’s human-readable result for the user instead of echoing raw payloads
 
 **Interrupted lean task:**
@@ -163,5 +167,11 @@ relaykit setup --host codex --host claude-code --host gemini-cli --host antigrav
 The MCP server exposes the operational RelayKit commands as tools prefixed with `relaykit_`:
 
 `relaykit_start_task`, `relaykit_answer_task`, `relaykit_confirm_task`, `relaykit_show_task`, `relaykit_list_tasks`, `relaykit_checkpoint_task`, `relaykit_checkpoint_phase`, `relaykit_prepare_git`, `relaykit_advance_task`, `relaykit_resume_task`, `relaykit_resume_handoff`, `relaykit_render_task_part`, `relaykit_render_consolidation_packet`, `relaykit_reflect_task`, `relaykit_host_status`, `relaykit_guided_setup`, `relaykit_setup`, `relaykit_bootstrap_host`, `relaykit_uninstall_host`, `relaykit_acknowledge_host`, `relaykit_install_self`, `relaykit_smoke`, `relaykit_doctor`, `relaykit_list`, `relaykit_preset`, `relaykit_stack`, `relaykit_render_prompt_stack`, `relaykit_init_workspace`, `relaykit_init_project`, `relaykit_init_persona`.
+
+Transport guidance:
+- if RelayKit tools are visible but a tool call fails with `Transport closed`, treat it as a dropped MCP session first, not proof that RelayKit is unavailable
+- retry once with `relaykit_ping`
+- then retry with `relaykit_doctor`
+- only after those retries fail should the host say RelayKit MCP is unavailable
 
 For the main lifecycle tools, MCP text content is now human-readable by default and structured content still carries the full payload. Agents should prefer the human summary unless the user explicitly asks for raw JSON.

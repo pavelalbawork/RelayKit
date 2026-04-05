@@ -360,6 +360,7 @@ def orchestration_guidance(state: dict[str, Any]) -> list[str]:
     status = state.get("status")
     current = current_phase(state)
     recent_files = _recent_repo_activity(state)
+    source_statuses = source_artifact_statuses(state)
     if status == "recommended":
         guidance.append("If work is actually starting, run `confirm-task` first so RelayKit owns the phase instead of trailing the repo.")
     if status in {"active", "launched"} and recent_files and current is not None and not _phase_checkpointed_parts(current):
@@ -368,6 +369,8 @@ def orchestration_guidance(state: dict[str, Any]) -> list[str]:
         guidance.append("Use `advance-task` now. The orchestration layer is waiting for an explicit phase decision.")
     if current is not None and current.get("phase_mode") == "research-phase":
         guidance.append("Do not start implementation output in a research-phase lane unless you explicitly reroute the task with `advance-task` or a change request.")
+    if any(item.get("status") in {"partially-addressed", "addressed-unverified"} for item in source_statuses):
+        guidance.append("Source critique artifacts have changed state. Resolve or supersede them before using them as fresh backlog again.")
     return dedupe(guidance)
 
 
@@ -387,6 +390,23 @@ def orchestration_required_action(state: dict[str, Any]) -> dict[str, Any] | Non
     current = current_phase(state)
     recent_files = _recent_repo_activity(state)
     checkpointed = _phase_checkpointed_parts(current) if current else []
+    stale_plan = stale_plan_assessment(state)
+
+    if stale_plan:
+        suggested = f"relaykit.py resume-task --task-id {task_id}"
+        kind = "refresh-plan"
+        if status == "recommended":
+            suggested = f"relaykit.py confirm-task --task-id {task_id} --accept=false --change \"Refresh the RelayKit recommendation to match current repo activity and source status.\""
+            kind = "re-recommend"
+        elif status in {"active", "launched", "blocked", "needs_reroute", "ready_for_next_phase"}:
+            suggested = f"relaykit.py advance-task --task-id {task_id} --change \"Refresh the active RelayKit plan to match current repo activity and source status.\""
+            kind = "advance-refresh"
+        return {
+            "kind": kind,
+            "urgency": "required_now",
+            "message": stale_plan["message"],
+            "suggested_command": suggested,
+        }
 
     if status == "recommended":
         return {
@@ -417,6 +437,36 @@ def orchestration_required_action(state: dict[str, Any]) -> dict[str, Any] | Non
             "suggested_command": suggested,
         }
     return None
+
+
+def stale_plan_assessment(state: dict[str, Any]) -> dict[str, Any] | None:
+    if state.get("status") in TERMINAL_STATUSES:
+        return None
+    reasons: list[str] = []
+    recent_files = _recent_repo_activity(state)
+    source_statuses = source_artifact_statuses(state)
+    status = state.get("status")
+    current = current_phase(state)
+    checkpointed = _phase_checkpointed_parts(current) if current else []
+    if status == "recommended" and recent_files:
+        reasons.append("repo activity began before the recommendation was confirmed")
+    if status in {"active", "launched"} and current is not None and recent_files and not checkpointed:
+        reasons.append("work advanced without a RelayKit checkpoint for the active phase")
+    changed_sources = [
+        item for item in source_statuses
+        if item.get("status") in {"partially-addressed", "addressed-unverified", "superseded", "verified"}
+    ]
+    if changed_sources:
+        reasons.append("source critique artifacts have changed status since this plan was generated")
+    if not reasons:
+        return None
+    return {
+        "stale": True,
+        "reasons": reasons,
+        "message": "The saved RelayKit plan is stale and should be refreshed before continuing.",
+        "source_artifacts": changed_sources,
+        "recent_files": recent_files[:5],
+    }
 
 
 def slugify(text: str) -> str:
@@ -872,6 +922,74 @@ def save_issue_status_summary(root: Path, profile_dirname: str, payload: dict[st
     return path
 
 
+def _source_status_from_issue_counts(issues: dict[str, Any]) -> str:
+    open_count = 0
+    addressed_count = 0
+    verified_count = 0
+    superseded_count = 0
+    for entry in issues.values():
+        if not isinstance(entry, dict):
+            continue
+        status = entry.get("status", "open")
+        if status == "open":
+            open_count += 1
+        elif status == "addressed-unverified":
+            addressed_count += 1
+        elif status == "verified":
+            verified_count += 1
+        elif status == "superseded":
+            superseded_count += 1
+    total = open_count + addressed_count + verified_count + superseded_count
+    if total == 0 or open_count == total:
+        return "active"
+    if open_count == 0 and addressed_count == 0 and verified_count == 0 and superseded_count > 0:
+        return "superseded"
+    if open_count == 0 and addressed_count == 0 and verified_count > 0:
+        return "verified"
+    if open_count == 0 and addressed_count > 0:
+        return "addressed-unverified"
+    return "partially-addressed"
+
+
+def source_artifact_statuses(state: dict[str, Any]) -> list[dict[str, Any]]:
+    profile_dirname = state.get("profile_dirname") or ".relaykit"
+    root = Path(state.get("storage_root") or ".")
+    status_summary = load_issue_status_summary(root, profile_dirname)
+    sources = status_summary.get("sources", {})
+    inventory = parse_issue_inventory(state)
+    inventory_by_source: dict[str, list[dict[str, Any]]] = {}
+    for item in inventory:
+        source_path = item.get("source_path")
+        if isinstance(source_path, str):
+            inventory_by_source.setdefault(source_path, []).append(item)
+    summaries: list[dict[str, Any]] = []
+    for doc in _source_doc_candidates(state):
+        source_key = str(doc)
+        source_entry = sources.get(source_key, {}) if isinstance(sources.get(source_key), dict) else {}
+        source_items = inventory_by_source.get(source_key, [])
+        counts = {
+            "open": sum(1 for item in source_items if item.get("status") == "open"),
+            "addressed_unverified": sum(1 for item in source_items if item.get("status") == "addressed-unverified"),
+            "verified": sum(1 for item in source_items if item.get("status") == "verified"),
+            "superseded": sum(1 for item in source_items if item.get("status") == "superseded"),
+        }
+        explicit_status = source_entry.get("status")
+        synthetic_issues = {
+            item.get("issue_id", f"issue-{index}"): {"status": item.get("status", "open")}
+            for index, item in enumerate(source_items)
+        }
+        status = explicit_status if isinstance(explicit_status, str) and explicit_status else _source_status_from_issue_counts(synthetic_issues)
+        summaries.append(
+            {
+                "source_path": source_key,
+                "status": status,
+                "updated_at": source_entry.get("updated_at"),
+                "counts": counts,
+            }
+        )
+    return summaries
+
+
 def _issue_category(section: str, title: str) -> str:
     text = f"{section} {title}".lower()
     if any(token in text for token in ["security", "secret", "credential", "keychain", "oauth", "auth"]):
@@ -914,6 +1032,11 @@ def parse_issue_inventory(state: dict[str, Any]) -> list[dict[str, Any]]:
                     "category": _issue_category(section, title),
                     "status": status,
                     "source_path": source_key,
+                    "source_status": (
+                        sources.get(source_key, {}).get("status")
+                        if isinstance(sources.get(source_key), dict)
+                        else None
+                    ),
                 }
             )
     return inventory
@@ -959,11 +1082,55 @@ def mark_issue_inventory_addressed(
             "category": item.get("category"),
         }
         source_entry["updated_at"] = now_iso()
+        source_entry["status"] = _source_status_from_issue_counts(issues)
         updated.append({"source_path": source_path, "issue_id": issue_id, "status": "addressed-unverified"})
     save_issue_status_summary(root, profile_dirname, payload)
     return {
         "updated_count": len(updated),
         "updated_issues": updated,
+        "state_path": str(issue_status_path(root, profile_dirname)),
+    }
+
+
+def mark_issue_inventory_superseded(
+    *,
+    root: Path,
+    profile_dirname: str,
+    issue_inventory: list[dict[str, Any]],
+    task_id: str,
+) -> dict[str, Any]:
+    payload = load_issue_status_summary(root, profile_dirname)
+    sources = payload.setdefault("sources", {})
+    updated_sources: list[dict[str, Any]] = []
+    by_source: dict[str, list[dict[str, Any]]] = {}
+    for item in issue_inventory:
+        source_path = item.get("source_path")
+        if isinstance(source_path, str):
+            by_source.setdefault(source_path, []).append(item)
+    for source_path, items in by_source.items():
+        source_entry = sources.setdefault(source_path, {"issues": {}, "updated_at": None})
+        issues = source_entry.setdefault("issues", {})
+        for item in items:
+            issue_id = item.get("issue_id")
+            if not isinstance(issue_id, str):
+                continue
+            current = issues.get(issue_id, {}) if isinstance(issues.get(issue_id), dict) else {}
+            issues[issue_id] = {
+                **current,
+                "status": "superseded",
+                "task_id": task_id,
+                "updated_at": now_iso(),
+                "title": item.get("title"),
+                "section": item.get("section"),
+                "category": item.get("category"),
+            }
+        source_entry["updated_at"] = now_iso()
+        source_entry["status"] = "superseded"
+        updated_sources.append({"source_path": source_path, "status": "superseded"})
+    save_issue_status_summary(root, profile_dirname, payload)
+    return {
+        "updated_count": len(updated_sources),
+        "updated_sources": updated_sources,
         "state_path": str(issue_status_path(root, profile_dirname)),
     }
 
@@ -1841,6 +2008,7 @@ def setup_recommendation(
         state,
         classification["archetype"],
     )
+    avoided_setup = learned_archetype_preferences(state, classification["archetype"]).get("avoid_setup")
     applied_learned_setup = None
     if classification["confidence"] != "low" and learned_coordination in {"solo", "coordinated"}:
         if learned_coordination == "solo":
@@ -1852,6 +2020,18 @@ def setup_recommendation(
             applied_learned_setup = learned_coordination
     if applied_learned_setup and learned_continuity in {"lean", "full"}:
         continuity = learned_continuity
+
+    current_setup = f"{coordination}+{continuity}"
+    if isinstance(avoided_setup, str) and current_setup == avoided_setup:
+        if current_setup == "coordinated+full":
+            if not research_required and not flags["pause_sensitive"] and not flags["cross_project"]:
+                continuity = "lean"
+            elif complexity <= 3:
+                coordination = "solo"
+        elif current_setup == "coordinated+lean" and complexity <= 3:
+            coordination = "solo"
+        elif current_setup == "solo+full" and not research_required and not flags["pause_sensitive"]:
+            continuity = "lean"
 
     if manual_setup.get("coordination") in {"solo", "coordinated"}:
         coordination = manual_setup["coordination"]
@@ -2049,6 +2229,7 @@ def setup_recommendation(
         "delivery_mode": delivery_mode,
         "notable_exclusions": notable_exclusions,
         "source_issues": classification.get("issue_summary"),
+        "source_artifacts": source_artifact_statuses(state),
         "next_step": next_step,
         "confirm_prompt": confirm_prompt,
         "internal_preset": preset_name,
@@ -2140,6 +2321,8 @@ def list_tasks(
 def build_summary_markdown(state: dict[str, Any]) -> str:
     recommendation = state.get("recommendation") or {}
     required_action = orchestration_required_action(state)
+    source_statuses = source_artifact_statuses(state)
+    stale_plan = stale_plan_assessment(state)
     lines = [
         f"# RelayKit Task {state['task_id']}",
         "",
@@ -2162,6 +2345,8 @@ def build_summary_markdown(state: dict[str, Any]) -> str:
         source_issues = recommendation.get("source_issues") or {}
         if source_issues.get("count"):
             lines.append(f"- Source issues: `{source_issues.get('open_count', 0)}` open / `{source_issues.get('count')}` total")
+        if source_statuses:
+            lines.append(f"- Source artifacts tracked: `{len(source_statuses)}`")
         lines.extend(["", "## Task Parts", ""])
         for part in recommendation.get("task_parts", []):
             assignment = part["assignment"]
@@ -2195,9 +2380,20 @@ def build_summary_markdown(state: dict[str, Any]) -> str:
                     f"- Suggested command: `{required_action['suggested_command']}`",
                 ]
             )
+        if stale_plan:
+            lines.extend(["", "## Plan Health", ""])
+            lines.append("- Saved plan is stale and should not be treated as current.")
+            lines.extend([f"- {reason}" for reason in stale_plan.get("reasons", [])])
         if drift:
             lines.extend(["", "## Drift Warnings", ""])
             lines.extend([f"- {item}" for item in drift])
+        if source_statuses:
+            lines.extend(["", "## Source Artifacts", ""])
+            for item in source_statuses:
+                counts = item.get("counts") or {}
+                lines.append(
+                    f"- `{item.get('status')}` — {item.get('source_path')} (open: {counts.get('open', 0)}, addressed: {counts.get('addressed_unverified', 0)}, verified: {counts.get('verified', 0)}, superseded: {counts.get('superseded', 0)})"
+                )
         if guidance:
             lines.extend(["", "## Orchestration Guidance", ""])
             lines.extend([f"- {item}" for item in guidance])
@@ -3479,23 +3675,34 @@ def resume_task(
     }
     drift = state_drift_warnings(state)
     guidance = orchestration_guidance(state)
+    stale_plan = stale_plan_assessment(state)
     required_action = orchestration_required_action(state)
     if drift:
         payload["drift_warnings"] = drift
     if guidance:
         payload["orchestration_guidance"] = guidance
+    if stale_plan:
+        payload["stale_plan"] = stale_plan
     if required_action:
         payload["required_action"] = required_action
     payload["orchestration_contract"] = orchestration_contract(state)
+    payload["source_artifacts"] = source_artifact_statuses(state)
     if verbosity == "verbose":
         payload["summary"] = state.get("continuation", {})
-        payload["recommendation"] = state.get("confirmed_plan") or state.get("recommendation")
+        active_recommendation = state.get("confirmed_plan") or state.get("recommendation")
+        if stale_plan:
+            payload["stale_recommendation"] = active_recommendation
+        else:
+            payload["recommendation"] = active_recommendation
     if is_stale(state):
         payload["resume_questions"] = [
             "What changed since the last checkpoint?",
             "Should RelayKit keep the current setup or recommend a new one?",
         ]
     plan = active_plan(state)
+    if stale_plan and plan:
+        payload["stale_part_ids"] = [part.get("part_id") for part in plan.get("task_parts", []) if part.get("part_id")]
+        return payload
     if plan and state.get("status") not in TERMINAL_STATUSES:
         if verbosity == "verbose":
             payload["setup"] = deepcopy(plan.get("setup", {}))
@@ -3907,18 +4114,29 @@ def show_task(
         "task_id": task_id,
         "status": state["status"],
         "task": state["task"]["original"] if isinstance(state.get("task"), dict) else state.get("task"),
-        "recommendation": state.get("recommendation"),
-        "confirmed_plan": state.get("confirmed_plan"),
         "continuation": state.get("continuation"),
         "current_phase_id": state.get("current_phase_id"),
-        "current_phase": current_phase(state),
         "latest_checkpoint": latest_checkpoint_event(state),
         "timeline": _build_timeline(state),
         "drift_warnings": state_drift_warnings(state),
         "orchestration_guidance": orchestration_guidance(state),
         "required_action": orchestration_required_action(state),
         "orchestration_contract": orchestration_contract(state),
+        "source_artifacts": source_artifact_statuses(state),
     }
+    stale_plan = stale_plan_assessment(state)
+    if stale_plan:
+        payload["stale_plan"] = stale_plan
+        payload["stale_recommendation"] = state.get("recommendation")
+        payload["stale_confirmed_plan"] = state.get("confirmed_plan")
+        payload["stale_current_phase"] = current_phase(state)
+        payload["recommendation"] = None
+        payload["confirmed_plan"] = None
+        payload["current_phase"] = None
+    else:
+        payload["recommendation"] = state.get("recommendation")
+        payload["confirmed_plan"] = state.get("confirmed_plan")
+        payload["current_phase"] = current_phase(state)
     phase = current_phase(state)
     if phase is not None:
         checkpointed_parts = _phase_checkpointed_parts(phase)
@@ -4703,10 +4921,19 @@ def reflect_task(
     append_jsonl(log_path, final_record)
     summary = refresh_learning_summary(root, registry)
     issue_updates = None
+    source_supersession = None
     issue_inventory = (state.get("classification") or {}).get("issue_inventory") or []
     task_text = task_summary_text(state).lower()
     if issue_inventory and any(token in task_text for token in ["fix", "address", "resolve"]):
         issue_updates = mark_issue_inventory_addressed(
+            root=root,
+            profile_dirname=profile_dirname,
+            issue_inventory=issue_inventory,
+            task_id=task_id,
+        )
+    notes_text = (notes or "").lower()
+    if issue_inventory and any(token in notes_text for token in ["supersede", "superseded", "obsolete", "stale source"]):
+        source_supersession = mark_issue_inventory_superseded(
             root=root,
             profile_dirname=profile_dirname,
             issue_inventory=issue_inventory,
@@ -4727,4 +4954,6 @@ def reflect_task(
     )
     if issue_updates:
         payload["source_artifact_updates"] = issue_updates
+    if source_supersession:
+        payload["source_artifact_supersession"] = source_supersession
     return payload
