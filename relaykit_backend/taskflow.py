@@ -68,6 +68,48 @@ FRONTEND_KEYWORDS = {
     "tailwind",
     "page",
 }
+BACKEND_KEYWORDS = {
+    "api",
+    "server",
+    "storage",
+    "database",
+    "migration",
+    "transport",
+    "integration",
+    "service",
+}
+SECURITY_KEYWORDS = {
+    "security",
+    "auth",
+    "oauth",
+    "credential",
+    "credentials",
+    "secret",
+    "token",
+    "keychain",
+    "permission",
+}
+CLEANUP_KEYWORDS = {
+    "cleanup",
+    "housekeeping",
+    "stale",
+    "empty dir",
+    "remove",
+    "delete",
+    "tidy",
+    "prune",
+}
+CROSS_PROJECT_KEYWORDS = {
+    "cross-project",
+    "cross project",
+    "across projects",
+    "across repos",
+    "multiple projects",
+    "multiple repos",
+    "multi-project",
+    "multi project",
+    "portfolio",
+}
 REVIEW_KEYWORDS = {
     "review",
     "critic",
@@ -127,6 +169,7 @@ PRE_IMPLEMENTATION_PATTERNS = (
     r"\bpre(?:-|\s)implementation\b",
     r"\bresearch(?:-|\s)?first\b",
     r"\bbefore (?:any )?(?:implementation|coding|execution|development) (?:starts?|begins?)\b",
+    r"\bbefore (?:implementing|building|coding)\b",
     r"\bno implementation yet\b",
     r"\bdon['’]?t (?:implement|build|code) yet\b",
     r"\ball decisions must be made before any implementation starts\b",
@@ -777,6 +820,58 @@ def parse_constraint_text(
     elif any(token in lowered for token in ["fast", "quick", "speed", "ship fast"]):
         posture = "speed-first"
 
+    role_preferences: dict[str, str] = {}
+    lane_preferences: dict[str, str] = {}
+    host_aliases = {
+        "codex": "codex",
+        "claude": "claude-code",
+        "claude-code": "claude-code",
+        "claude code": "claude-code",
+        "gemini": "gemini-cli",
+        "gemini-cli": "gemini-cli",
+        "gemini cli": "gemini-cli",
+        "antigravity": "antigravity",
+    }
+    lane_patterns = {
+        "frontend-build": ["frontend", "ui"],
+        "ui-repair": ["frontend", "ui"],
+        "frontend-test": ["frontend test", "browser verification", "browser test"],
+        "core-repair": ["backend", "core", "security", "auth", "cleanup"],
+        "implementation": ["implementation", "backend", "core"],
+        "verification": ["verification", "verify", "review"],
+        "research": ["research", "investigate"],
+        "design": ["design", "ux", "visual"],
+        "synthesis": ["synthesis", "consolidate"],
+    }
+    role_patterns = {
+        "builder": ["builder", "implementation"],
+        "researcher": ["research", "investigate"],
+        "reviewer": ["review", "verification", "verify"],
+        "critic": ["critique", "critic", "challenge"],
+        "tester": ["test", "qa", "browser verification", "browser test"],
+    }
+
+    clauses = [
+        clause.strip()
+        for clause in re.split(r"[\n,;\.:]|\band\b", lowered)
+        if clause.strip()
+    ]
+
+    for clause in clauses:
+        for alias, host_name in host_aliases.items():
+            if alias not in clause:
+                continue
+            for lane_name, phrases in lane_patterns.items():
+                if any(_text_contains_term(clause, phrase) for phrase in phrases):
+                    lane_preferences[lane_name] = host_name
+            for role_name, phrases in role_patterns.items():
+                if any(_text_contains_term(clause, phrase) for phrase in phrases):
+                    role_preferences[role_name] = host_name
+
+    explicit_split = bool(role_preferences or lane_preferences) or bool(
+        re.search(r"\b(split|parallelize|distribute|assign)\b", lowered) and len(mentioned_hosts) >= 2
+    )
+
     if "all" in lowered and "available" in lowered:
         allowed_hosts = list(default_allowed_hosts)
     elif "only" in lowered and mentioned_hosts:
@@ -793,6 +888,9 @@ def parse_constraint_text(
         "allowed_hosts": dedupe(allowed_hosts),
         "excluded_hosts": dedupe(excluded_hosts),
         "budget_posture": posture,
+        "preferred_hosts_by_role": role_preferences,
+        "preferred_hosts_by_lane": lane_preferences,
+        "explicit_split": explicit_split,
     }
 
 
@@ -1197,33 +1295,50 @@ def classify_task(state: dict[str, Any], registry: dict[str, Any]) -> dict[str, 
         PRE_IMPLEMENTATION_PATTERNS,
     )
     frontend_matches = _keyword_matches(text, FRONTEND_KEYWORDS)
+    backend_matches = _keyword_matches(text, BACKEND_KEYWORDS)
+    security_matches = _keyword_matches(text, SECURITY_KEYWORDS)
+    cleanup_matches = _keyword_matches(text, CLEANUP_KEYWORDS)
     review_matches = _keyword_matches(text, REVIEW_KEYWORDS)
     research_matches = _keyword_matches(text, RESEARCH_KEYWORDS)
     planning_matches = _keyword_matches(text, PLANNING_KEYWORDS)
     implementation_matches = _keyword_matches(text, IMPLEMENTATION_KEYWORDS)
     bugfix_matches = _keyword_matches(text, BUGFIX_KEYWORDS)
     pause_matches = _keyword_matches(text, PAUSE_KEYWORDS)
+    cross_project_matches = _keyword_matches(text, CROSS_PROJECT_KEYWORDS)
     issue_inventory = parse_issue_inventory(state)
     issue_summary = _issue_inventory_summary(issue_inventory)
     issue_categories = set(issue_summary["categories"])
+    parsed_constraints = _effective_parsed_constraints(state, registry)
+    mixed_categories = set(issue_categories.intersection({"frontend", "backend", "security", "cleanup"}))
+    if frontend_matches:
+        mixed_categories.add("frontend")
+    if backend_matches:
+        mixed_categories.add("backend")
+    if security_matches:
+        mixed_categories.add("security")
+    if cleanup_matches:
+        mixed_categories.add("cleanup")
     flags = {
         "frontend": bool(frontend_matches),
+        "backend": bool(backend_matches),
         "review": bool(review_matches),
         "research": bool(research_matches) or pre_implementation_research,
         "planning": bool(planning_matches),
         "implementation": bool(implementation_matches),
         "bugfix": bool(bugfix_matches),
         "pause_sensitive": bool(pause_matches),
-        "cross_project": state["scope"] == "workspace",
-        "security": "security" in issue_categories,
-        "cleanup": "cleanup" in issue_categories,
-        "mixed_packet": bool(issue_summary["mixed_packet"]),
+        "cross_project": bool(cross_project_matches),
+        "security": "security" in issue_categories or bool(security_matches),
+        "cleanup": "cleanup" in issue_categories or bool(cleanup_matches),
+        "mixed_packet": bool(issue_summary["mixed_packet"]) or len(mixed_categories) >= 2,
     }
     if issue_categories.intersection({"frontend"}):
         flags["frontend"] = True
     if issue_categories.intersection({"backend", "security", "cleanup"}):
         flags["implementation"] = True
         flags["bugfix"] = True
+    elif (backend_matches or security_matches or cleanup_matches) and (implementation_matches or bugfix_matches):
+        flags["implementation"] = True
     if "verification" in issue_categories:
         flags["review"] = True
     if pre_implementation_research:
@@ -1286,6 +1401,7 @@ def classify_task(state: dict[str, Any], registry: dict[str, Any]) -> dict[str, 
         "remaining_uncertainty": remaining_uncertainty,
         "issue_inventory": issue_inventory,
         "issue_summary": issue_summary,
+        "mixed_categories": sorted(mixed_categories),
     }
 
 
@@ -1431,10 +1547,7 @@ def choose_host_model(
     if preferred_lane:
         host_name = preferred_lane.get("host")
         model_name = preferred_lane.get("model")
-        if (
-            host_name in allowed_hosts
-            and model_name in allowed_models.get(host_name, [])
-        ):
+        if host_name in allowed_hosts and model_name in allowed_models.get(host_name, []):
             payload = {
                 "host": host_name,
                 "model": model_name,
@@ -1444,6 +1557,15 @@ def choose_host_model(
             if payload["reasoning_effort"] is None and host_name == "codex":
                 payload["reasoning_effort"] = "high" if role in {"builder", "orchestrator"} else "medium"
             return payload
+        if host_name in allowed_hosts and model_name is None:
+            inferred_model, reasoning = model_for(host_name, list(allowed_models.get(host_name, [])))
+            if inferred_model:
+                return {
+                    "host": host_name,
+                    "model": inferred_model,
+                    "reasoning_effort": preferred_lane.get("reasoning_effort", reasoning),
+                    "credit_pool": preferred_lane.get("credit_pool"),
+                }
 
     candidates: list[tuple[str, list[str], str]] = []
     # Build candidates from registry hosts and their models, ordered by role fit.
@@ -1994,6 +2116,28 @@ def _delivery_mode_recommendation(
     }
 
 
+def _effective_parsed_constraints(state: dict[str, Any], registry: dict[str, Any]) -> dict[str, Any]:
+    parsed = state["task"].get("parsed_constraints")
+    if isinstance(parsed, dict) and parsed:
+        return parsed
+    source_text = state["task"].get("constraints_text") or state["task"]["original"]
+    default_hosts = state["inventory"].get("workspace_available_hosts") or state["inventory"].get("effective_hosts") or list(registry["hosts"].keys())
+    return parse_constraint_text(
+        source_text,
+        registry,
+        default_allowed_hosts=list(default_hosts),
+    )
+
+
+def _explicit_split_requested(state: dict[str, Any], registry: dict[str, Any]) -> bool:
+    parsed = _effective_parsed_constraints(state, registry)
+    return bool(
+        parsed.get("explicit_split")
+        or parsed.get("preferred_hosts_by_role")
+        or parsed.get("preferred_hosts_by_lane")
+    )
+
+
 def setup_recommendation(
     state: dict[str, Any],
     registry: dict[str, Any],
@@ -2015,6 +2159,7 @@ def setup_recommendation(
     )
 
     flags = classification["flags"]
+    explicit_split = _explicit_split_requested(state, registry)
     complexity = 0
     complexity += 1 if flags["implementation"] else 0
     complexity += 1 if flags["review"] else 0
@@ -2033,6 +2178,17 @@ def setup_recommendation(
         coordination = "coordinated"
     elif complexity >= 4:
         coordination = "coordinated"
+
+    if (
+        classification["confidence"] == "low"
+        and coordination == "coordinated"
+        and not explicit_split
+        and not flags["mixed_packet"]
+        and not research_required
+        and not flags["cross_project"]
+        and not flags["pause_sensitive"]
+    ):
+        coordination = "solo"
 
     continuity = "lean"
     if research_required or flags["pause_sensitive"] or flags["cross_project"]:
@@ -2111,8 +2267,18 @@ def setup_recommendation(
     assigned_parts: list[dict[str, Any]] = []
     selected_hosts: list[str] = []
     selected_models: list[str] = []
+    parsed_constraints = _effective_parsed_constraints(state, registry)
     for part in parts:
-        preferred_lane = lanes.get(part["lane_hint"])
+        preferred_lane = deepcopy(lanes.get(part["lane_hint"]) or {})
+        lane_host = (parsed_constraints.get("preferred_hosts_by_lane") or {}).get(part["part_id"])
+        if not lane_host:
+            lane_host = (parsed_constraints.get("preferred_hosts_by_lane") or {}).get(part["lane_hint"])
+        role_host = (parsed_constraints.get("preferred_hosts_by_role") or {}).get(part["role"])
+        preferred_host = lane_host or role_host
+        if preferred_host:
+            preferred_lane["host"] = preferred_host
+            preferred_lane.setdefault("credit_pool", preferred_host)
+            preferred_lane.pop("model", None)
         assignment = choose_host_model(
             registry,
             role=part["role"],
@@ -2265,6 +2431,7 @@ def setup_recommendation(
         "delivery_mode": delivery_mode,
         "notable_exclusions": notable_exclusions,
         "source_issues": classification.get("issue_summary"),
+        "mixed_categories": classification.get("mixed_categories", []),
         "source_artifacts": source_artifact_statuses(state),
         "next_step": next_step,
         "confirm_prompt": confirm_prompt,
