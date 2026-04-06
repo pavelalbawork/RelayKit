@@ -533,6 +533,8 @@ def tool_start_task(arguments: dict[str, Any]) -> dict[str, Any]:
         task_text=arguments.get("task", ""),
         task_scope=arguments.get("task_scope"),
         allowed_hosts=arguments.get("allowed_hosts"),
+        intake_mode=arguments.get("intake_mode", "auto"),
+        manual_plan=arguments.get("manual_plan"),
         skip_clarification=bool(arguments.get("skip_clarification", False)),
         dry_run=bool(arguments.get("dry_run", False)),
         execution_context=execution_context,
@@ -1106,7 +1108,7 @@ TOOLS: dict[str, dict[str, Any]] = {
         "handler": tool_init_persona,
     },
     "relaykit_start_task": {
-        "description": "Use when the user wants to parallelize work, split work across tools, use all their tools, or assign different lanes before execution starts. Starts RelayKit intake from free text and returns the next clarification question or recommendation. After a recommendation appears, confirm it before real work starts.",
+        "description": "Use when the user wants to parallelize work, split work across tools, use all their tools, or assign different lanes before execution starts. Supports auto recommendation, guided structured intake, or fully manual plans. After a recommendation or manual plan appears, confirm it before real work starts.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -1117,6 +1119,12 @@ TOOLS: dict[str, dict[str, Any]] = {
                 "task_scope": {"type": "string", "enum": ["workspace", "project"]},
                 "task": {"type": "string"},
                 "allowed_hosts": {"type": "array", "items": {"type": "string"}},
+                "intake_mode": {"type": "string", "enum": sorted(taskflow.INTAKE_MODES)},
+                "manual_plan": {
+                    "type": "object",
+                    "description": "Explicit RelayKit plan for guided or manual intake. Include phase_mode, setup, and task_parts.",
+                    "additionalProperties": True
+                },
                 "skip_clarification": {"type": "boolean"},
                 "dry_run": {"type": "boolean", "description": "Preview the recommendation without persisting any state."}
             },

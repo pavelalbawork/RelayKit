@@ -102,6 +102,8 @@ Use RelayKit when you want a focused product surface for:
 - checkpoints and resume flows
 - optional personas and overlays
 
+If the recommendation engine is not the right fit for a task, RelayKit can still run as orchestration-only infrastructure. Provide a structured plan with `relaykit start-task --intake-mode manual --plan-json ...` or `relaykit run --intake-mode manual --plan-json ...`, then let RelayKit handle confirmations, checkpoints, advances, resume flows, and reflections without inventing the lane split for you.
+
 ## Read This First
 
 - [Core Concepts](./concepts.md)

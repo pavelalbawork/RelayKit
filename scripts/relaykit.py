@@ -3619,6 +3619,7 @@ def command_run(args: argparse.Namespace) -> int:
         workspace_root=workspace_root,
         project_root=project_root,
     )
+    manual_plan = _manual_plan_from_args(args)
     try:
         payload = taskflow.start_task(
             registry,
@@ -3629,6 +3630,8 @@ def command_run(args: argparse.Namespace) -> int:
             task_text=task_text,
             task_scope=args.task_scope,
             allowed_hosts=args.allowed_host or None,
+            intake_mode=args.intake_mode,
+            manual_plan=manual_plan,
             skip_clarification=bool(args.skip_clarification),
             execution_context=execution_context,
         )
@@ -3753,6 +3756,7 @@ def command_start_task(args: argparse.Namespace) -> int:
         workspace_root=workspace_root,
         project_root=project_root,
     )
+    manual_plan = _manual_plan_from_args(args)
     try:
         payload = taskflow.start_task(
             registry,
@@ -3763,6 +3767,8 @@ def command_start_task(args: argparse.Namespace) -> int:
             task_text=args.task,
             task_scope=args.task_scope,
             allowed_hosts=args.allowed_host or None,
+            intake_mode=args.intake_mode,
+            manual_plan=manual_plan,
             skip_clarification=bool(args.skip_clarification),
             dry_run=bool(getattr(args, "dry_run", False)),
             execution_context=execution_context,
@@ -4097,6 +4103,58 @@ def add_taskflow_format_argument(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _manual_plan_from_args(args: argparse.Namespace) -> dict | None:
+    plan_json = getattr(args, "plan_json", None)
+    plan_file = getattr(args, "plan_file", None)
+    task_parts = getattr(args, "task_part", None) or []
+    phase_mode = getattr(args, "phase_mode", None)
+    coordination = getattr(args, "coordination", None)
+    continuity = getattr(args, "continuity", None)
+
+    if plan_json and plan_file:
+        fail("use either --plan-json or --plan-file, not both")
+    if plan_json:
+        try:
+            payload = json.loads(plan_json)
+        except json.JSONDecodeError as error:
+            fail(f"invalid --plan-json: {error}")
+        if not isinstance(payload, dict):
+            fail("--plan-json must decode to a JSON object")
+        return payload
+    if plan_file:
+        path = Path(plan_file).resolve()
+        if not path.exists():
+            fail(f"plan file does not exist: {path}")
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as error:
+            fail(f"invalid plan file JSON: {error}")
+        if not isinstance(payload, dict):
+            fail("plan file must decode to a JSON object")
+        return payload
+    if not any([task_parts, phase_mode, coordination, continuity]):
+        return None
+    parsed_parts: list[dict] = []
+    for raw in task_parts:
+        try:
+            item = json.loads(raw)
+        except json.JSONDecodeError as error:
+            fail(f"invalid --task-part JSON: {error}")
+        if not isinstance(item, dict):
+            fail("--task-part entries must decode to JSON objects")
+        parsed_parts.append(item)
+    payload: dict[str, object] = {
+        "phase_mode": phase_mode or "implementation-phase",
+        "setup": {},
+        "task_parts": parsed_parts,
+    }
+    if coordination:
+        payload["setup"]["coordination"] = coordination
+    if continuity:
+        payload["setup"]["continuity"] = continuity
+    return payload
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="RelayKit: coordinate multiple AI coding agents working in parallel, with human checkpoints between phases."
@@ -4112,6 +4170,17 @@ def build_parser() -> argparse.ArgumentParser:
     add_taskflow_format_argument(parser_start_task)
     parser_start_task.add_argument("--task", required=True)
     parser_start_task.add_argument("--allowed-host", action="append")
+    parser_start_task.add_argument("--intake-mode", choices=sorted(taskflow.INTAKE_MODES), default="auto")
+    parser_start_task.add_argument("--plan-json", help="JSON object describing a manual or guided RelayKit plan.")
+    parser_start_task.add_argument("--plan-file", help="Path to a JSON file describing a manual or guided RelayKit plan.")
+    parser_start_task.add_argument("--phase-mode", choices=sorted(taskflow.PHASE_MODES))
+    parser_start_task.add_argument("--coordination", choices=["solo", "coordinated"])
+    parser_start_task.add_argument("--continuity", choices=["lean", "full"])
+    parser_start_task.add_argument(
+        "--task-part",
+        action="append",
+        help="JSON object describing one manual task part, e.g. '{\"part_id\":\"backend\",\"role\":\"builder\",\"host\":\"codex\"}'.",
+    )
     parser_start_task.add_argument("--skip-clarification", action="store_true")
     parser_start_task.add_argument("--dry-run", action="store_true", help="Preview the recommendation without persisting any state.")
     parser_start_task.set_defaults(func=command_start_task)
@@ -4123,6 +4192,17 @@ def build_parser() -> argparse.ArgumentParser:
     add_task_context_arguments(parser_run)
     parser_run.add_argument("--task")
     parser_run.add_argument("--allowed-host", action="append")
+    parser_run.add_argument("--intake-mode", choices=sorted(taskflow.INTAKE_MODES), default="auto")
+    parser_run.add_argument("--plan-json", help="JSON object describing a manual or guided RelayKit plan.")
+    parser_run.add_argument("--plan-file", help="Path to a JSON file describing a manual or guided RelayKit plan.")
+    parser_run.add_argument("--phase-mode", choices=sorted(taskflow.PHASE_MODES))
+    parser_run.add_argument("--coordination", choices=["solo", "coordinated"])
+    parser_run.add_argument("--continuity", choices=["lean", "full"])
+    parser_run.add_argument(
+        "--task-part",
+        action="append",
+        help="JSON object describing one manual task part, e.g. '{\"part_id\":\"backend\",\"role\":\"builder\",\"host\":\"codex\"}'.",
+    )
     parser_run.add_argument("--skip-clarification", action="store_true")
     parser_run.add_argument("--accept", action="store_true", help="Auto-accept the first recommendation.")
     parser_run.add_argument("--force-protocol", action="store_true", help="Allow RelayKit protocol even when the recommendation says manual is better.")

@@ -36,6 +36,7 @@ HANDOFF_VERBOSITIES = {"ultra-compact", "compact", "verbose"}
 RESUME_VERBOSITIES = {"compact", "verbose"}
 RESULT_VERBOSITIES = {"compact", "verbose"}
 PHASE_MODES = {"review-phase", "research-phase", "implementation-phase"}
+INTAKE_MODES = {"auto", "guided", "manual"}
 TOOL_COST = {
     "gpt-5.4": "high",
     "gpt-5.4-mini": "low",
@@ -258,6 +259,50 @@ def phase_mode_summary(phase_mode: str) -> str:
     if phase_mode == "review-phase":
         return "Advisory or gate review only. Do not take implementation ownership unless the task is explicitly rerouted."
     return "Implementation is in scope. Research and review may support execution, but the phase is allowed to produce code."
+
+
+def _delivery_verdict_for_setup(coordination: str, continuity: str) -> str:
+    if continuity == "full":
+        return "full"
+    if coordination == "solo":
+        return "lean"
+    return "lean"
+
+
+def _default_capabilities_for_role(role: str, *, phase_mode: str) -> list[str]:
+    if phase_mode == "research-phase":
+        if role == "researcher":
+            return ["research", "evidence", "synthesis"]
+        if role == "converger":
+            return ["research", "synthesis", "decision-making"]
+    mapping = {
+        "builder": ["implementation", "repo_edit", "verification"],
+        "tester": ["browser", "verification", "frontend"],
+        "reviewer": ["review", "verification", "critique"],
+        "critic": ["critique", "review"],
+        "researcher": ["research", "evidence", "synthesis"],
+        "converger": ["research", "synthesis", "decision-making"],
+        "orchestrator": ["routing", "checkpointing", "consolidation"],
+    }
+    return deepcopy(mapping.get(role, ["implementation", "verification"]))
+
+
+def _default_objective_for_role(role: str, *, phase_mode: str) -> str:
+    if phase_mode == "research-phase":
+        if role == "researcher":
+            return "Gather the missing evidence and reduce uncertainty before execution starts."
+        if role == "converger":
+            return "Consolidate findings into a decision-ready summary without starting implementation."
+    mapping = {
+        "builder": "Own the bounded execution slice and keep the scope disciplined.",
+        "tester": "Verify the work and catch regressions before it advances.",
+        "reviewer": "Review the packet and decide whether it is ready to advance.",
+        "critic": "Challenge the plan or output and surface the main risks.",
+        "researcher": "Gather the missing evidence before the next execution decision.",
+        "converger": "Compare or merge candidate outputs into one final direction.",
+        "orchestrator": "Own routing, checkpointing, and next-step coordination.",
+    }
+    return mapping.get(role, "Continue the bounded task work.")
 
 
 def output_contract_for_part(part: dict[str, Any], *, phase_mode: str) -> dict[str, Any]:
@@ -1970,6 +2015,175 @@ def build_research_recommendation(
     }
 
 
+def build_manual_recommendation(
+    state: dict[str, Any],
+    registry: dict[str, Any],
+    *,
+    manual_plan: dict[str, Any],
+) -> dict[str, Any]:
+    phase_mode = manual_plan.get("phase_mode") or "implementation-phase"
+    if phase_mode not in PHASE_MODES:
+        fail("manual plan has invalid phase_mode")
+    setup = manual_plan.get("setup") or {}
+    coordination = setup.get("coordination") or ("coordinated" if len(manual_plan.get("task_parts") or []) > 1 else "solo")
+    continuity = setup.get("continuity") or "full"
+    if coordination not in {"solo", "coordinated"}:
+        fail("manual plan has invalid setup.coordination")
+    if continuity not in {"lean", "full"}:
+        fail("manual plan has invalid setup.continuity")
+    raw_parts = manual_plan.get("task_parts")
+    if not isinstance(raw_parts, list) or not raw_parts:
+        fail("manual plan requires at least one task part")
+
+    classification = state.get("classification") or classify_task(state, registry)
+    assigned_parts: list[dict[str, Any]] = []
+    selected_hosts: list[str] = []
+    selected_models: list[str] = []
+    for index, raw_part in enumerate(raw_parts, start=1):
+        if not isinstance(raw_part, dict):
+            fail(f"manual plan task_parts[{index-1}] must be an object")
+        assignment_input = raw_part.get("assignment") if isinstance(raw_part.get("assignment"), dict) else raw_part
+        role = str(assignment_input.get("role") or raw_part.get("role") or "builder")
+        host_name = assignment_input.get("host")
+        if not isinstance(host_name, str) or not host_name:
+            fail(f"manual plan task_parts[{index-1}] requires `host`")
+        preferred_lane = {
+            "host": host_name,
+            "model": assignment_input.get("model"),
+            "reasoning_effort": assignment_input.get("reasoning_effort"),
+            "credit_pool": assignment_input.get("credit_pool") or host_name,
+        }
+        capabilities = raw_part.get("capabilities")
+        if not isinstance(capabilities, list) or not capabilities:
+            capabilities = _default_capabilities_for_role(role, phase_mode=phase_mode)
+        resolved_assignment = choose_host_model(
+            registry,
+            role=role,
+            capabilities=capabilities,
+            inventory=state["inventory"],
+            classification=classification,
+            preferred_lane=preferred_lane,
+        )
+        skill_name = str(assignment_input.get("skill") or raw_part.get("skill") or ROLE_TO_SKILL.get(role, "contributor"))
+        persona_name = assignment_input.get("persona") or raw_part.get("persona")
+        if not isinstance(persona_name, str) or not persona_name:
+            persona_name = recommended_persona(
+                registry,
+                role=role,
+                host=resolved_assignment["host"],
+                classification=classification,
+            )
+        prompt_stack, stack_components = build_part_stack(
+            registry,
+            skill_name=skill_name,
+            host_name=resolved_assignment["host"],
+            model_name=resolved_assignment["model"],
+            persona_name=persona_name,
+        )
+        checkpoint_policy = raw_part.get("checkpoint_policy") or assignment_input.get("checkpoint_policy") or _default_checkpoint_policy(role)
+        if checkpoint_policy not in CHECKPOINT_POLICIES:
+            fail(f"manual plan task_parts[{index-1}] has invalid checkpoint_policy")
+        part_id = str(raw_part.get("part_id") or f"part-{index:02d}")
+        assigned_parts.append(
+            {
+                "part_id": part_id,
+                "name": str(raw_part.get("name") or part_id.replace("-", " ")),
+                "objective": str(raw_part.get("objective") or _default_objective_for_role(role, phase_mode=phase_mode)),
+                "assignment": {
+                    "skill": skill_name,
+                    "role": role,
+                    "host": resolved_assignment["host"],
+                    "model": resolved_assignment["model"],
+                    "reasoning_effort": resolved_assignment.get("reasoning_effort"),
+                    "credit_pool": resolved_assignment.get("credit_pool"),
+                    "persona": persona_name,
+                },
+                "checkpoint_policy": checkpoint_policy,
+                "reason": str(raw_part.get("reason") or f"Manual {phase_mode} plan assigned this lane to {resolved_assignment['host']}."),
+                "prompt_stack": prompt_stack,
+                "stack_components": stack_components,
+                "output_contract": output_contract_for_part(
+                    {
+                        "role": role,
+                        "capabilities": capabilities,
+                    },
+                    phase_mode=phase_mode,
+                ),
+            }
+        )
+        selected_hosts.append(resolved_assignment["host"])
+        selected_models.append(resolved_assignment["model"])
+
+    coordination_overhead = "low" if len(assigned_parts) == 1 else "medium"
+    if len(set(selected_hosts)) > 1 or len(assigned_parts) > 2:
+        coordination_overhead = "high"
+    model_cost = max((TOOL_COST.get(model, "medium") for model in selected_models), default="medium")
+    context_transfer = "low" if coordination == "solo" else ("medium" if len(set(selected_hosts)) == 1 else "high")
+    why_this_is_enough = ""
+    why_not_simpler = ""
+    if coordination == "solo" and continuity == "lean":
+        why_this_is_enough = "the plan is intentionally minimal and RelayKit is only tracking a bounded single-lane packet."
+    elif coordination == "coordinated" and continuity == "lean":
+        why_this_is_enough = "the plan keeps only the explicit lanes the operator asked for, without paying for full continuity."
+    else:
+        why_not_simpler = "the operator chose durable orchestration for this packet, so RelayKit is preserving that plan instead of re-routing it."
+    verdict = _delivery_verdict_for_setup(coordination, continuity)
+    return {
+        "task_summary": task_summary_text(state),
+        "phase_mode": phase_mode,
+        "phase_summary": phase_mode_summary(phase_mode),
+        "archetype": {
+            "value": "manual-plan",
+            "confidence": "operator-defined",
+        },
+        "setup": {
+            "coordination": coordination,
+            "continuity": continuity,
+            "why_this_is_enough": why_this_is_enough,
+            "why_not_simpler": why_not_simpler,
+        },
+        "confidence": {
+            "level": "operator-defined",
+            "main_uncertainty": "RelayKit is following an explicit operator plan instead of inferring one.",
+        },
+        "overhead": {
+            "coordination": coordination_overhead,
+            "model_cost": model_cost,
+            "context_transfer": context_transfer,
+        },
+        "task_parts": assigned_parts,
+        "research": {
+            "mode": "manual",
+            "summary": "This plan was provided directly by the operator or host agent.",
+        },
+        "delivery_mode": {
+            "verdict": verdict,
+            "recommended": "relaykit",
+            "protocol_setup": f"{coordination}+{continuity}",
+            "gate_required": False,
+            "reason": "RelayKit is preserving an explicit operator-defined plan.",
+            "override_hint": "",
+        },
+        "notable_exclusions": [],
+        "source_issues": classification.get("issue_summary"),
+        "mixed_categories": classification.get("mixed_categories", []),
+        "source_artifacts": source_artifact_statuses(state),
+        "next_step": "Accept this plan to create the task phase.",
+        "confirm_prompt": "Accept this plan, or replace it with an updated one.",
+        "internal_preset": "manual-intake",
+        "learned_influence": {
+            "preferred_setup": None,
+            "applied_setup": False,
+            "prior_task_count": 0,
+            "avoided_setup": None,
+            "reasoning": [
+                "Operator-defined plan: RelayKit skipped automatic recommendation."
+            ],
+        },
+        "intake_mode": "manual",
+    }
+
+
 def _build_learned_influence(
     state: dict[str, Any],
     archetype: str,
@@ -3084,12 +3298,18 @@ def start_task(
     task_text: str,
     task_scope: str | None = None,
     allowed_hosts: list[str] | None = None,
+    intake_mode: str = "auto",
+    manual_plan: dict[str, Any] | None = None,
     skip_clarification: bool = False,
     dry_run: bool = False,
     execution_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not task_text.strip():
         fail("task text is required")
+    if intake_mode not in INTAKE_MODES:
+        fail("intake_mode must be one of auto, guided, or manual")
+    if intake_mode in {"guided", "manual"} and not isinstance(manual_plan, dict):
+        fail("manual or guided intake requires a manual_plan object")
 
     storage_root = root_for_task(workspace_root, project_root, task_scope)
     inventory = normalize_workspace_inventory(registry, workspace_profile)
@@ -3154,6 +3374,7 @@ def start_task(
         "continuation": {},
         "reflection": [],
         "execution_context": deepcopy(execution_context) if execution_context else None,
+        "intake_mode": intake_mode,
     }
     if skip_clarification and not effective_hosts:
         state["inventory"]["effective_hosts"] = workspace_available_hosts
@@ -3167,7 +3388,11 @@ def start_task(
 
     if dry_run:
         state["clarification"]["skipped"] = True
-        recommendation = setup_recommendation(state, registry, workspace_profile, project_profile)
+        recommendation = (
+            build_manual_recommendation(state, registry, manual_plan=manual_plan)
+            if intake_mode in {"guided", "manual"}
+            else setup_recommendation(state, registry, workspace_profile, project_profile)
+        )
         return {
             "task_id": state["task_id"],
             "stage": "dry_run",
@@ -3176,6 +3401,32 @@ def start_task(
             "classification": state.get("classification"),
             "note": "Dry run — no state was persisted. Run start-task without --dry-run to begin.",
         }
+
+    if intake_mode in {"guided", "manual"}:
+        recommendation = build_manual_recommendation(state, registry, manual_plan=manual_plan)
+        state["classification"] = classify_task(state, registry)
+        state["recommendation"] = recommendation
+        state["status"] = "recommended"
+        state["continuation"] = {
+            "current_state": "Manual plan ready for confirmation.",
+            "next_best_action": recommendation["next_step"],
+            "optional_parallel_follow_up": "",
+            "safe_stop_point": "You can stop after reviewing the plan.",
+            "resume_instructions": f"Run `relaykit.py resume-task --task-id {state['task_id']}` to continue.",
+        }
+        payload = {
+            "task_id": state["task_id"],
+            "stage": "recommendation",
+            "recommendation": recommendation,
+            "required_action": orchestration_required_action(state),
+            "orchestration_contract": orchestration_contract(state),
+        }
+        state_file, summary_file = save_task_state(state, registry)
+        _create_scratchpad(state, registry)
+        payload["state_path"] = str(state_file)
+        payload["summary_path"] = str(summary_file)
+        payload["setup_hint"] = "manual-intake"
+        return payload
 
     payload = maybe_recommend(state, registry, workspace_profile, project_profile)
     state_file, summary_file = save_task_state(state, registry)

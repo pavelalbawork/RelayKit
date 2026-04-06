@@ -66,6 +66,26 @@ relaykit run --workspace-root . --task "Fix the auth bug"
 
 `run` is the easiest human-first entrypoint. It walks clarifications interactively, prints the verdict (`manual`, `lean`, or `full`), and then confirms or revises the setup without making you chain commands manually.
 
+**Orchestration-only flow with an explicit plan:**
+```bash
+relaykit start-task \
+  --workspace-root . \
+  --task "Ship the backend fix and review it" \
+  --task-scope workspace \
+  --intake-mode manual \
+  --plan-json '{
+    "phase_mode": "implementation-phase",
+    "setup": { "coordination": "coordinated", "continuity": "lean" },
+    "task_parts": [
+      { "part_id": "backend", "role": "builder", "host": "codex", "objective": "Own the backend fix." },
+      { "part_id": "verify", "role": "reviewer", "host": "claude-code", "objective": "Verify and gate the fix." }
+    ]
+  }'
+relaykit confirm-task --workspace-root . --task-id <id> --accept
+```
+
+Use `--intake-mode manual` when you want RelayKit to preserve an operator-defined lane map instead of inferring one. Use `--intake-mode guided` when a host or script is collecting those structured choices first and then passing the resulting `manual_plan` to RelayKit.
+
 `setup` and `smoke` also default to `--format auto`, so a normal terminal gets a concise human-readable summary while redirected output stays JSON-safe. Use `--format json` when you want the raw payload.
 
 Supported host ids:

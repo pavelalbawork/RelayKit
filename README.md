@@ -8,6 +8,8 @@ Task intake, lane recommendation, onboarding, checkpoints, handoffs, and learnin
 
 RelayKit now also keeps lightweight issue state for critique-driven work, so old review docs do not have to act like permanent backlog forever.
 
+If you do not trust the recommendation engine for a given task, RelayKit can still run as an orchestration layer: provide the phase, setup, and lane assignments yourself, then use confirmations, checkpoints, advances, resume flows, and reflections on top of that operator-defined plan.
+
 ## Quick Start
 
 Install RelayKit:
@@ -165,6 +167,46 @@ relaykit setup --all-hosts
 ```
 
 Use `relaykit host-status --host <host>` when you want a readiness check without changing anything.
+
+## Orchestration-Only Mode
+
+Recommendation is optional. If you already know the right phase and lane split, start RelayKit from an explicit plan and skip inference:
+
+```bash
+relaykit start-task \
+  --workspace-root . \
+  --task "Ship the backend fix and review it" \
+  --task-scope workspace \
+  --intake-mode manual \
+  --plan-json '{
+    "phase_mode": "implementation-phase",
+    "setup": { "coordination": "coordinated", "continuity": "lean" },
+    "task_parts": [
+      { "part_id": "backend", "role": "builder", "host": "codex", "objective": "Own the backend fix." },
+      { "part_id": "verify", "role": "reviewer", "host": "claude-code", "objective": "Verify and gate the fix." }
+    ]
+  }'
+```
+
+Or use the human-first shell flow with the same explicit plan:
+
+```bash
+relaykit run \
+  --workspace-root . \
+  --task "Ship the backend fix and review it" \
+  --task-scope workspace \
+  --intake-mode manual \
+  --plan-json '{
+    "phase_mode": "implementation-phase",
+    "setup": { "coordination": "coordinated", "continuity": "lean" },
+    "task_parts": [
+      { "part_id": "backend", "role": "builder", "host": "codex", "objective": "Own the backend fix." },
+      { "part_id": "verify", "role": "reviewer", "host": "claude-code", "objective": "Verify and gate the fix." }
+    ]
+  }'
+```
+
+Use `intake_mode=guided` when the host or operator is supplying a structured plan that still came from an interactive question flow. In both `guided` and `manual`, RelayKit preserves the provided plan and focuses on orchestration instead of recommendation.
 
 ## More Install Options
 
