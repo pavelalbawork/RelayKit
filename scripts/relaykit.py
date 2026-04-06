@@ -849,13 +849,43 @@ def remove_json_mcp_config(path: Path) -> dict[str, object]:
     return {"path": str(path.resolve()), "configured": False}
 
 
+def _host_mcp_probe(host_name: str, *, allow_cli_probe: bool = True) -> tuple[bool | None, str | None]:
+    mcp_target = HOST_MCP_TARGETS.get(host_name)
+    if mcp_target is None:
+        return False, None
+    resolved_mcp_path = expand_user_path(mcp_target["path"])
+    if mcp_target["kind"] == "toml" and resolved_mcp_path.exists():
+        configured = f"[mcp_servers.{MCP_SERVER_NAME}]" in resolved_mcp_path.read_text(encoding="utf-8")
+        return configured, None
+    if mcp_target["kind"] == "json" and resolved_mcp_path.exists():
+        configured = MCP_SERVER_NAME in read_json(resolved_mcp_path).get("mcpServers", {})
+        return configured, None
+    if mcp_target["kind"] == "claude-cli":
+        if not allow_cli_probe:
+            return None, "skipped CLI MCP probe to avoid re-entering the active host during an MCP call"
+        try:
+            result = subprocess.run(
+                ["claude", "mcp", "get", MCP_SERVER_NAME],
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=3,
+            )
+        except subprocess.TimeoutExpired:
+            return None, "CLI MCP probe timed out"
+        return result.returncode == 0, None
+    return False, None
+
+
 def host_onboarding_status(host_name: str) -> dict[str, object]:
     state = load_onboarding_state()
     persisted = host_state(state, host_name)
+    current_host_detected = detect_current_host() == host_name
     payload: dict[str, object] = {
         "host": host_name,
         "product": PRODUCT_NAME,
-        "current_host_detected": detect_current_host() == host_name,
+        "current_host_detected": current_host_detected,
         "recommended": [],
         "state": persisted,
     }
@@ -893,27 +923,19 @@ def host_onboarding_status(host_name: str) -> dict[str, object]:
         return payload
 
     resolved_mcp_path = expand_user_path(mcp_target["path"])
-    configured = False
-    if mcp_target["kind"] == "toml" and resolved_mcp_path.exists():
-        configured = f"[mcp_servers.{MCP_SERVER_NAME}]" in resolved_mcp_path.read_text(encoding="utf-8")
-    if mcp_target["kind"] == "json" and resolved_mcp_path.exists():
-        configured = MCP_SERVER_NAME in read_json(resolved_mcp_path).get("mcpServers", {})
-    if mcp_target["kind"] == "claude-cli":
-        result = subprocess.run(
-            ["claude", "mcp", "get", MCP_SERVER_NAME],
-            check=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        configured = result.returncode == 0
+    configured, probe_note = _host_mcp_probe(
+        host_name,
+        allow_cli_probe=not current_host_detected,
+    )
     payload["mcp"] = {
         "path": str(resolved_mcp_path),
         "configured": configured,
         "auto_configurable": True,
         "server": mcp_server_spec(),
     }
-    if not configured:
+    if probe_note:
+        payload["mcp"]["probe_note"] = probe_note
+    if configured is False:
         payload["recommended"].append(
             {
                 "action": "install_mcp",
