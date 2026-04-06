@@ -78,8 +78,27 @@ def make_text_result(
     return result
 
 
+TEXT_ONLY_TASKFLOW_COMMANDS = {
+    "doctor",
+    "start-task",
+    "answer-task",
+    "show-task",
+    "list-tasks",
+    "confirm-task",
+    "checkpoint-task",
+    "checkpoint-phase",
+    "advance-task",
+    "resume-task",
+    "resume-handoff",
+    "render-consolidation-packet",
+    "reflect-task",
+}
+
+
 def make_taskflow_result(payload: dict[str, Any], *, command_name: str) -> dict[str, Any]:
     text = relaykit.render_taskflow_payload(payload, command_name=command_name)
+    if command_name in TEXT_ONLY_TASKFLOW_COMMANDS:
+        return make_text_result(text)
     structured = dict(payload)
     structured["display_text"] = text
     return make_text_result(text, structured=structured)
