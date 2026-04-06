@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import sys
 import time
@@ -93,11 +94,12 @@ TEXT_ONLY_TASKFLOW_COMMANDS = {
     "render-consolidation-packet",
     "reflect-task",
 }
+STRUCTURED_TASKFLOW_ENV = "RELAYKIT_MCP_INCLUDE_STRUCTURED"
 
 
 def make_taskflow_result(payload: dict[str, Any], *, command_name: str) -> dict[str, Any]:
     text = relaykit.render_taskflow_payload(payload, command_name=command_name)
-    if command_name in TEXT_ONLY_TASKFLOW_COMMANDS:
+    if command_name in TEXT_ONLY_TASKFLOW_COMMANDS and os.environ.get(STRUCTURED_TASKFLOW_ENV) != "1":
         return make_text_result(text)
     structured = dict(payload)
     structured["display_text"] = text
@@ -619,7 +621,7 @@ def tool_confirm_task(arguments: dict[str, Any]) -> dict[str, Any]:
         workspace_profile=workspace_profile,
         project_profile=project_profile,
     )
-    return make_taskflow_result(payload, command_name="checkpoint-task")
+    return make_taskflow_result(payload, command_name="confirm-task")
 
 
 def tool_checkpoint_task(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -642,7 +644,7 @@ def tool_checkpoint_task(arguments: dict[str, Any]) -> dict[str, Any]:
         report_markdown=arguments.get("report_markdown"),
         verbosity=arguments.get("verbosity", "compact"),
     )
-    return make_taskflow_result(payload, command_name="checkpoint-phase")
+    return make_taskflow_result(payload, command_name="checkpoint-task")
 
 
 def tool_checkpoint_phase(arguments: dict[str, Any]) -> dict[str, Any]:

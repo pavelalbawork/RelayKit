@@ -95,6 +95,20 @@ RESEARCH_KEYWORDS = {
     "consolidate",
     "synthesis",
 }
+PLANNING_KEYWORDS = {
+    "plan",
+    "planning",
+    "implementation plan",
+    "decision-complete",
+    "decision complete",
+    "transport choices",
+    "fallback order",
+    "onboarding model",
+    "migration approach",
+    "test strategy",
+    "architecture",
+    "state model",
+}
 IMPLEMENTATION_KEYWORDS = {
     "build",
     "implement",
@@ -117,6 +131,10 @@ PRE_IMPLEMENTATION_PATTERNS = (
     r"\bdon['’]?t (?:implement|build|code) yet\b",
     r"\ball decisions must be made before any implementation starts\b",
     r"\bimplementation-ready brief\b",
+)
+OUT_OF_SCOPE_PATTERNS = (
+    r"\bout of scope\s*:\s*.*",
+    r"\bnot in scope\s*:\s*.*",
 )
 
 
@@ -160,6 +178,25 @@ def _keyword_matches(text: str, keywords: set[str]) -> list[str]:
 
 def _matches_any_pattern(text: str, patterns: tuple[str, ...]) -> bool:
     return any(re.search(pattern, text) for pattern in patterns)
+
+
+def _strip_out_of_scope_text(text: str) -> str:
+    cleaned = text
+    for pattern in OUT_OF_SCOPE_PATTERNS:
+        cleaned = re.sub(pattern, "", cleaned, flags=re.IGNORECASE | re.DOTALL)
+    return cleaned
+
+
+def _task_signal_text(state: dict[str, Any]) -> str:
+    task = state["task"]
+    parts = [
+        task["original"],
+        _strip_out_of_scope_text(task.get("scope_boundaries") or ""),
+        task.get("definition_of_done") or "",
+        task.get("verification") or "",
+        task.get("remaining_uncertainty") or "",
+    ]
+    return " ".join(part for part in parts if part).lower()
 
 
 def phase_mode_for_classification(classification: dict[str, Any]) -> str:
@@ -310,6 +347,9 @@ def _recent_repo_activity(state: dict[str, Any], *, window_minutes: int = 120) -
     if not repo_root.exists():
         return []
     cutoff = datetime.now(timezone.utc).timestamp() - (window_minutes * 60)
+    state_reference = parse_iso(state.get("updated_at") or state.get("created_at"))
+    if state_reference is not None:
+        cutoff = max(cutoff, state_reference.timestamp() + 1)
     recent: list[tuple[float, str]] = []
     for path in repo_root.rglob("*"):
         if not path.is_file():
@@ -1150,15 +1190,7 @@ def _ultra_compact_execution_context(execution_context: dict[str, Any] | None) -
 
 
 def classify_task(state: dict[str, Any], registry: dict[str, Any]) -> dict[str, Any]:
-    text = " ".join(
-        [
-            state["task"]["original"],
-            state["task"].get("scope_boundaries") or "",
-            state["task"].get("definition_of_done") or "",
-            state["task"].get("verification") or "",
-            state["task"].get("remaining_uncertainty") or "",
-        ]
-    ).lower()
+    text = _task_signal_text(state)
     manual_setup = state.get("manual_overrides", {})
     pre_implementation_research = bool(manual_setup.get("pre_implementation_research")) or _matches_any_pattern(
         text,
@@ -1167,6 +1199,7 @@ def classify_task(state: dict[str, Any], registry: dict[str, Any]) -> dict[str, 
     frontend_matches = _keyword_matches(text, FRONTEND_KEYWORDS)
     review_matches = _keyword_matches(text, REVIEW_KEYWORDS)
     research_matches = _keyword_matches(text, RESEARCH_KEYWORDS)
+    planning_matches = _keyword_matches(text, PLANNING_KEYWORDS)
     implementation_matches = _keyword_matches(text, IMPLEMENTATION_KEYWORDS)
     bugfix_matches = _keyword_matches(text, BUGFIX_KEYWORDS)
     pause_matches = _keyword_matches(text, PAUSE_KEYWORDS)
@@ -1177,6 +1210,7 @@ def classify_task(state: dict[str, Any], registry: dict[str, Any]) -> dict[str, 
         "frontend": bool(frontend_matches),
         "review": bool(review_matches),
         "research": bool(research_matches) or pre_implementation_research,
+        "planning": bool(planning_matches),
         "implementation": bool(implementation_matches),
         "bugfix": bool(bugfix_matches),
         "pause_sensitive": bool(pause_matches),
@@ -1195,6 +1229,8 @@ def classify_task(state: dict[str, Any], registry: dict[str, Any]) -> dict[str, 
     if pre_implementation_research:
         flags["implementation"] = False
         flags["bugfix"] = False
+    if flags["planning"] and flags["research"] and not flags["bugfix"]:
+        flags["implementation"] = False
 
     if flags["review"] and not flags["implementation"] and not flags["research"]:
         task_type = "review-only"
